@@ -44,8 +44,8 @@ export const Timeline: React.FC<TimelineProps> = ({
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
   const [collapsed, setCollapsed] = useState(false);
-  const [contextMenu, setContextMenu] = useState<{x: number, y: number, trackIdx: number, keyTime: number} | null>(null);
   const [draggingKey, setDraggingKey] = useState<{ trackIdx: number, keyIndex: number } | null>(null);
+  const [isScrubbing, setIsScrubbing] = useState(false);
 
   const FRAME_WIDTH = 12 * zoom;
   const HEADER_HEIGHT = 30;
@@ -106,7 +106,7 @@ export const Timeline: React.FC<TimelineProps> = ({
 
       let currentY = HEADER_HEIGHT + LOOP_BAR_HEIGHT;
 
-      // Audio Track rendering (omitted for brevity, same as previous)
+      // Audio Track rendering
       if (clip && clip.audio) {
           ctx.fillStyle = '#0f2e1a';
           ctx.fillRect(0, currentY, width, ROW_HEIGHT);
@@ -155,7 +155,6 @@ export const Timeline: React.FC<TimelineProps> = ({
   }, [currentFrame, mode, clip, zoom, wrapperRef.current?.clientWidth, wrapperRef.current?.clientHeight, bones, loopRange]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
-      // Snapping Logic
       const rect = canvasRef.current?.getBoundingClientRect();
       if (!rect) return;
       const x = e.clientX - rect.left;
@@ -163,42 +162,73 @@ export const Timeline: React.FC<TimelineProps> = ({
 
       // Handle Loop Dragging (Top Bar)
       if (y < LOOP_BAR_HEIGHT) {
-         const frame = Math.round((x - SIDEBAR_WIDTH) / FRAME_WIDTH);
-         // Simplified loop range setting: Left click sets start, Right click (or shift) sets end
+         const frame = Math.max(0, Math.round((x - SIDEBAR_WIDTH) / FRAME_WIDTH));
          if (e.shiftKey) setLoopRange({ ...loopRange, end: frame, enabled: true });
          else setLoopRange({ ...loopRange, start: frame, enabled: true });
          return;
       }
 
-      if (x < SIDEBAR_WIDTH) return;
-      const frame = Math.max(0, Math.round((x - SIDEBAR_WIDTH) / FRAME_WIDTH));
-      const trackIdx = Math.floor((y - HEADER_HEIGHT - LOOP_BAR_HEIGHT) / ROW_HEIGHT);
+      // Check for Keyframe Click
+      if (x >= SIDEBAR_WIDTH) {
+          const frame = Math.max(0, Math.round((x - SIDEBAR_WIDTH) / FRAME_WIDTH));
+          const trackIdx = Math.floor((y - HEADER_HEIGHT - LOOP_BAR_HEIGHT) / ROW_HEIGHT);
 
-      if (mode === TimelineMode.CLIP && clip?.tracks && trackIdx >= 0 && trackIdx < clip.tracks.length) {
-          const track = clip.tracks[trackIdx];
-          const keyIndex = track.keyframes.findIndex(k => Math.abs(k.time - frame) < 0.5); // Snap check
-          if (keyIndex !== -1) { setDraggingKey({ trackIdx, keyIndex }); return; }
-      }
-      setCurrentFrame(frame);
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-      if (draggingKey && mode === TimelineMode.CLIP) {
-          const rect = canvasRef.current?.getBoundingClientRect();
-          if (!rect) return;
-          const x = e.clientX - rect.left;
-          const frame = Math.max(0, Math.round((x - SIDEBAR_WIDTH) / FRAME_WIDTH)); // Snap to integer frame
-          
-          const newClip = { ...clip };
-          const track = newClip.tracks[draggingKey.trackIdx];
-          const key = track.keyframes[draggingKey.keyIndex];
-          // Prevent overlap
-          if (!track.keyframes.some((k, i) => i !== draggingKey.keyIndex && k.time === frame)) {
-              key.time = frame;
-              updateClip(newClip);
+          if (mode === TimelineMode.CLIP && clip?.tracks && trackIdx >= 0 && trackIdx < clip.tracks.length) {
+              const track = clip.tracks[trackIdx];
+              const keyIndex = track.keyframes.findIndex(k => Math.abs(k.time - frame) < 0.5); // Snap check
+              if (keyIndex !== -1) { 
+                  setDraggingKey({ trackIdx, keyIndex }); 
+                  return; 
+              }
           }
       }
+
+      // Start Scrubbing
+      setIsScrubbing(true);
+      if (x >= SIDEBAR_WIDTH) {
+          const frame = Math.max(0, (x - SIDEBAR_WIDTH) / FRAME_WIDTH);
+          setCurrentFrame(frame); // Allow float during scrub
+      }
   };
+
+  // Global Mouse Move for dragging
+  useEffect(() => {
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+        const rect = canvasRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        const x = e.clientX - rect.left;
+
+        if (draggingKey && mode === TimelineMode.CLIP) {
+            const frame = Math.max(0, Math.round((x - SIDEBAR_WIDTH) / FRAME_WIDTH));
+            const newClip = { ...clip };
+            const track = newClip.tracks[draggingKey.trackIdx];
+            const key = track.keyframes[draggingKey.keyIndex];
+            if (!track.keyframes.some((k, i) => i !== draggingKey.keyIndex && k.time === frame)) {
+                key.time = frame;
+                updateClip(newClip);
+            }
+        } else if (isScrubbing) {
+            const frame = Math.max(0, (x - SIDEBAR_WIDTH) / FRAME_WIDTH);
+            setCurrentFrame(frame);
+        }
+    };
+
+    const handleGlobalMouseUp = () => {
+        setDraggingKey(null);
+        setIsScrubbing(false);
+        // Snap to integer on release if desired, or keep smooth
+        setCurrentFrame(Math.round(currentFrame)); 
+    };
+
+    if (draggingKey || isScrubbing) {
+        window.addEventListener('mousemove', handleGlobalMouseMove);
+        window.addEventListener('mouseup', handleGlobalMouseUp);
+    }
+    return () => {
+        window.removeEventListener('mousemove', handleGlobalMouseMove);
+        window.removeEventListener('mouseup', handleGlobalMouseUp);
+    };
+  }, [draggingKey, isScrubbing, clip, mode, currentFrame, FRAME_WIDTH, SIDEBAR_WIDTH]);
 
   return (
     <>
@@ -217,11 +247,11 @@ export const Timeline: React.FC<TimelineProps> = ({
            {/* Playback Controls */}
            <div className="flex bg-neutral-900 rounded p-0.5 border border-neutral-700">
                 <button onClick={() => setCurrentFrame(loopRange.enabled ? loopRange.start : 0)} className="p-1 hover:bg-neutral-800 rounded text-gray-400" title="Go to Start"><SkipBack size={12}/></button>
-                <button onClick={() => setCurrentFrame(Math.max(0, currentFrame - 1))} className="p-1 hover:bg-neutral-800 rounded text-gray-400" title="Step Back"><StepBack size={12}/></button>
+                <button onClick={() => setCurrentFrame(Math.max(0, Math.floor(currentFrame) - 1))} className="p-1 hover:bg-neutral-800 rounded text-gray-400" title="Step Back"><StepBack size={12}/></button>
                 <button onClick={() => setIsPlaying(!isPlaying)} className="p-1 hover:bg-neutral-800 rounded text-white mx-1">
                     {isPlaying ? <Pause size={14} fill="white" /> : <Play size={14} fill="white" />}
                 </button>
-                <button onClick={() => setCurrentFrame(currentFrame + 1)} className="p-1 hover:bg-neutral-800 rounded text-gray-400" title="Step Forward"><StepForward size={12}/></button>
+                <button onClick={() => setCurrentFrame(Math.floor(currentFrame) + 1)} className="p-1 hover:bg-neutral-800 rounded text-gray-400" title="Step Forward"><StepForward size={12}/></button>
                 <button onClick={() => setCurrentFrame(loopRange.enabled ? loopRange.end : clip.duration)} className="p-1 hover:bg-neutral-800 rounded text-gray-400" title="Go to End"><SkipForward size={12}/></button>
            </div>
            
@@ -255,7 +285,7 @@ export const Timeline: React.FC<TimelineProps> = ({
       </div>
 
       <div className="flex-1 relative overflow-y-auto overflow-x-hidden" ref={wrapperRef}>
-          <canvas ref={canvasRef} className="absolute top-0 left-0 block cursor-pointer" onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={() => setDraggingKey(null)} onMouseLeave={() => setDraggingKey(null)}/>
+          <canvas ref={canvasRef} className="absolute top-0 left-0 block cursor-pointer" onMouseDown={handleMouseDown} />
       </div>
     </div>
     </>

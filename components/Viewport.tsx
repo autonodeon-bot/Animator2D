@@ -1,7 +1,7 @@
 
 import React, { useRef, useState, useEffect } from 'react';
 import { Bone, ToolMode, CameraState, Sprite, AppSettings, Selection, DerivedBone, TransformMode, DrawingStroke, ReferenceImage, Vector2 } from '../types';
-import { calculateFK, degToRad, solveIK } from '../utils';
+import { calculateFK, degToRad, radToDeg, solveIK } from '../utils';
 
 interface ViewportProps {
   bones: Bone[];
@@ -21,8 +21,8 @@ interface ViewportProps {
   referenceImage: ReferenceImage | null;
   motionPath: Vector2[];
   isolateMode: boolean;
-  onSnapshot: (blob: Blob) => void; // New callback for snapshot
-  triggerSnapshot: boolean; // Flag to trigger
+  onSnapshot: (blob: Blob) => void;
+  triggerSnapshot: boolean;
 }
 
 export const Viewport: React.FC<ViewportProps> = ({
@@ -55,23 +55,23 @@ export const Viewport: React.FC<ViewportProps> = ({
     startX: number;
     startY: number;
     initialVal: any; 
-    currentPoints?: {x: number, y: number}[]; // For drawing
+    // For angular rotation
+    pivot?: Vector2;
+    startAngle?: number;
+    currentPoints?: {x: number, y: number}[];
   } | null>(null);
 
   const derivedBones = calculateFK(bones);
   const derivedPrevBones = prevBones ? calculateFK(prevBones) : null;
 
-  // Filter for Isolate Mode
   const getVisibleBones = () => {
       if (!isolateMode || !selection || selection.type !== 'BONE') return derivedBones;
-      // Show only selected bone and its children
       const visibleIds = new Set<string>();
       const traverse = (id: string) => {
           visibleIds.add(id);
           derivedBones.filter(b => b.parentId === id).forEach(c => traverse(c.id));
       };
       traverse(selection.id);
-      // Also show ancestors to root for context? Usually isolation shows just the branch.
       return derivedBones.filter(b => visibleIds.has(b.id));
   };
   const visibleBones = getVisibleBones();
@@ -112,17 +112,28 @@ export const Viewport: React.FC<ViewportProps> = ({
       return 'default';
   };
 
-  const getLocalMouse = (e: React.MouseEvent) => {
+  // Convert Screen Mouse (Pixel) to World Space (SVG Units)
+  const getLocalMouse = (clientX: number, clientY: number) => {
      const rect = svgRef.current?.getBoundingClientRect();
      if (!rect) return { x: 0, y: 0 };
+     
      const centerX = rect.width / 2;
      const centerY = rect.height / 2;
-     const mx = e.clientX - rect.left - centerX;
-     const my = e.clientY - rect.top - centerY;
-     const camRad = degToRad(-camera.rotation);
+     
+     // Mouse relative to center of SVG
+     const mx = clientX - rect.left - centerX;
+     const my = clientY - rect.top - centerY;
+     
+     // Un-rotate camera
+     const camRad = degToRad(-camera.rotation); // Negative because SVG rotate is clockwise
      const unrotX = mx * Math.cos(-camRad) - my * Math.sin(-camRad);
      const unrotY = mx * Math.sin(-camRad) + my * Math.cos(-camRad);
-     return { x: (unrotX / camera.zoom) + camera.x, y: (unrotY / camera.zoom) + camera.y };
+     
+     // Un-scale and Un-translate
+     return { 
+         x: (unrotX / camera.zoom) + camera.x, 
+         y: (unrotY / camera.zoom) + camera.y 
+     };
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -130,7 +141,7 @@ export const Viewport: React.FC<ViewportProps> = ({
       e.preventDefault();
       setDragState({ active: true, type: 'camera', startX: e.clientX, startY: e.clientY, initialVal: { ...camera } });
     } else if (mode === ToolMode.DRAW) {
-       const p = getLocalMouse(e);
+       const p = getLocalMouse(e.clientX, e.clientY);
        setDragState({ active: true, type: 'drawing', startX: 0, startY: 0, initialVal: null, currentPoints: [p] });
     } else if (mode === ToolMode.SELECT) {
        if (e.target === svgRef.current) setSelection(null);
@@ -140,11 +151,27 @@ export const Viewport: React.FC<ViewportProps> = ({
   const handleObjectMouseDown = (e: React.MouseEvent, type: 'bone' | 'sprite', id: string) => {
     e.stopPropagation(); e.preventDefault();
     setSelection({ type: type === 'bone' ? 'BONE' : 'SPRITE', id });
+    const mousePos = getLocalMouse(e.clientX, e.clientY);
+
     if (mode === ToolMode.SELECT) {
         if (type === 'bone' && bones) {
             const bone = bones.find(b => b.id === id);
-            if (bone && !bone.locked) {
-                 setDragState({ active: true, type: 'bone', targetId: id, startX: e.clientX, startY: e.clientY, initialVal: { rotation: bone.rotation, x: bone.x, y: bone.y } });
+            const derivedBone = derivedBones.find(b => b.id === id);
+            
+            if (bone && derivedBone && !bone.locked) {
+                 // For Rotation: Calculate initial angle relative to bone start
+                 const angleToMouse = Math.atan2(mousePos.y - derivedBone.worldStart.y, mousePos.x - derivedBone.worldStart.x);
+                 
+                 setDragState({ 
+                     active: true, 
+                     type: 'bone', 
+                     targetId: id, 
+                     startX: e.clientX, 
+                     startY: e.clientY, 
+                     initialVal: { rotation: bone.rotation, x: bone.x, y: bone.y },
+                     pivot: derivedBone.worldStart,
+                     startAngle: angleToMouse
+                 });
             }
         } else if (type === 'sprite' && sprites) {
             const sprite = sprites.find(s => s.id === id);
@@ -157,28 +184,35 @@ export const Viewport: React.FC<ViewportProps> = ({
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!dragState || !dragState.active) return;
+    
+    // Screen delta
     const dx = e.clientX - dragState.startX;
     const dy = e.clientY - dragState.startY;
 
     if (dragState.type === 'camera') {
         const rad = degToRad(camera.rotation);
         const cos = Math.cos(rad); const sin = Math.sin(rad);
+        // Correct rotation logic for camera pan
         const rdx = (dx * cos + dy * sin) / camera.zoom;
         const rdy = (-dx * sin + dy * cos) / camera.zoom;
         setCamera(prev => ({ ...prev, x: dragState.initialVal.x - rdx, y: dragState.initialVal.y - rdy }));
     } 
     else if (dragState.type === 'drawing') {
-        const p = getLocalMouse(e);
+        const p = getLocalMouse(e.clientX, e.clientY);
         setDragState(prev => prev ? ({ ...prev, currentPoints: [...(prev.currentPoints || []), p] }) : null);
     }
     else if (dragState.type === 'bone' && dragState.targetId && bones) {
       const bone = bones.find(b => b.id === dragState.targetId);
       if (!bone || bone.locked) return;
+      
+      const worldMouse = getLocalMouse(e.clientX, e.clientY);
+
       if (transformMode === 'TRANSLATE') {
-         const worldMouse = getLocalMouse(e);
          if (bone.parentId === null) {
+             // Root movement
              updateBone(bone.id, { x: snap(worldMouse.x), y: snap(worldMouse.y) });
          } else {
+             // IK Movement
              const solvedBones = solveIK(bones, bone.id, worldMouse);
              solvedBones.forEach(sb => {
                  const original = bones.find(b => b.id === sb.id);
@@ -186,15 +220,50 @@ export const Viewport: React.FC<ViewportProps> = ({
              });
          }
       } else {
-         const rotDelta = dx * 0.5; 
-         let newRot = dragState.initialVal.rotation + rotDelta;
-         if (settings.snapToGrid) newRot = Math.round(newRot / 15) * 15;
-         updateBone(bone.id, { rotation: newRot });
+         // Angular Rotation Logic (Intuitive)
+         if (dragState.pivot && dragState.startAngle !== undefined) {
+             const currentAngle = Math.atan2(worldMouse.y - dragState.pivot.y, worldMouse.x - dragState.pivot.x);
+             const angleDiff = radToDeg(currentAngle - dragState.startAngle);
+             
+             let newRot = dragState.initialVal.rotation + angleDiff;
+             if (settings.snapToGrid) newRot = Math.round(newRot / 15) * 15;
+             updateBone(bone.id, { rotation: newRot });
+         }
       }
     }
     else if (dragState.type === 'sprite' && dragState.targetId) {
-        const zoom = camera.zoom;
-        updateSprite(dragState.targetId, { offsetX: dragState.initialVal.offsetX + (dx / zoom), offsetY: dragState.initialVal.offsetY + (dy / zoom) });
+        const sprite = sprites.find(s => s.id === dragState.targetId);
+        const parentBone = derivedBones.find(b => b.id === sprite?.boneId);
+        
+        if (sprite && parentBone) {
+            // We need to transform the SCREEN delta into BONE LOCAL space
+            
+            // 1. Un-scale camera zoom
+            const zoomDx = dx / camera.zoom;
+            const zoomDy = dy / camera.zoom;
+
+            // 2. We need to account for Camera Rotation AND Bone Rotation
+            // Total visual rotation = Bone World Rotation - Camera Rotation
+            // Note: Camera rotation affects the viewport, so we usually just need Bone World Rotation relative to World axes
+            
+            // Actually, getLocalMouse handles camera. So let's just use world coordinates difference
+            const worldMouseStart = getLocalMouse(dragState.startX, dragState.startY);
+            const worldMouseCurrent = getLocalMouse(e.clientX, e.clientY);
+            
+            const worldDx = worldMouseCurrent.x - worldMouseStart.x;
+            const worldDy = worldMouseCurrent.y - worldMouseStart.y;
+
+            // 3. Project world delta onto bone local axes
+            // Rotate the vector (worldDx, worldDy) by -BoneRotation
+            const boneRad = degToRad(-parentBone.worldRotation);
+            const localDx = worldDx * Math.cos(boneRad) - worldDy * Math.sin(boneRad);
+            const localDy = worldDx * Math.sin(boneRad) + worldDy * Math.cos(boneRad);
+            
+            updateSprite(dragState.targetId, { 
+                offsetX: dragState.initialVal.offsetX + localDx, 
+                offsetY: dragState.initialVal.offsetY + localDy 
+            });
+        }
     }
   };
 
@@ -248,7 +317,6 @@ export const Viewport: React.FC<ViewportProps> = ({
           <div className="absolute top-0 left-0 w-full h-full pointer-events-none z-0 opacity-20">
              <div className="absolute top-1/2 left-0 w-full h-px bg-white"></div>
              <div className="absolute top-0 left-1/2 w-px h-full bg-white"></div>
-             {/* Simple visual ticks */}
              {[...Array(20)].map((_, i) => (
                  <div key={i} className="absolute h-2 w-px bg-gray-500" style={{ left: '50%', transform: `translateX(${i * 100}px)` }}></div>
              ))}
@@ -281,11 +349,10 @@ export const Viewport: React.FC<ViewportProps> = ({
 
          <g transform={`translate(${w / 2}, ${h / 2}) scale(${camera.zoom}) rotate(${-camera.rotation}) translate(${-camera.x}, ${-camera.y})`}>
             
-            {/* Reference Image */}
             {referenceImage && referenceImage.visible && (
                 <image 
                    href={referenceImage.url} 
-                   x={referenceImage.x - 500} // Centered approximation
+                   x={referenceImage.x - 500} 
                    y={referenceImage.y - 500} 
                    width={1000 * referenceImage.scale} 
                    height={1000 * referenceImage.scale} 
@@ -294,7 +361,6 @@ export const Viewport: React.FC<ViewportProps> = ({
                 />
             )}
 
-            {/* Drawings */}
             {drawings.map(d => (
                 <polyline key={d.id} points={d.points.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke={d.color} strokeWidth={d.width} strokeLinecap="round" />
             ))}
@@ -302,7 +368,6 @@ export const Viewport: React.FC<ViewportProps> = ({
                 <polyline points={dragState.currentPoints.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke="#fff" strokeWidth={2} strokeLinecap="round" />
             )}
 
-            {/* Motion Path */}
             {settings.showMotionPaths && motionPath.length > 1 && (
                 <polyline 
                    points={motionPath.map(p => `${p.x},${p.y}`).join(' ')} 
@@ -316,7 +381,6 @@ export const Viewport: React.FC<ViewportProps> = ({
 
             {sprites.sort((a,b) => a.zIndex - b.zIndex).map(sprite => {
                 const bone = visibleBones.find(b => b.id === sprite.boneId);
-                // In Isolate mode, hide sprites attached to hidden bones
                 if (!bone || bone.visible === false) return null;
                 const isSelected = selection?.type === 'SPRITE' && selection.id === sprite.id;
                 
@@ -339,7 +403,7 @@ export const Viewport: React.FC<ViewportProps> = ({
                    if (transformMode === 'ROTATE') { boneColor = '#3b82f6'; jointColor = '#1d4ed8'; } 
                    else if (transformMode === 'TRANSLATE') { jointColor = '#fff'; }
                }
-               const width = settings.boneThickness || 20; // Smart sizing
+               const width = settings.boneThickness || 20; 
                const tipWidth = width * 0.3;
 
                return (
@@ -347,7 +411,6 @@ export const Viewport: React.FC<ViewportProps> = ({
                     <path d={getBonePath(bone, width, width)} fill="transparent" stroke="transparent" />
                     <path d={getBonePath(bone, tipWidth, tipWidth/3)} fill={boneColor} stroke="none" opacity={0.9} />
                     <circle cx={bone.worldStart.x} cy={bone.worldStart.y} r={tipWidth/1.5} fill={jointColor} stroke={boneColor} strokeWidth={2} />
-                    {/* Render Constraints Visuals */}
                     {bone.constraints?.some(c => c.type === 'LIMIT_ROTATION') && (
                         <path d={`M ${bone.worldStart.x} ${bone.worldStart.y} L ${bone.worldStart.x + 10} ${bone.worldStart.y}`} stroke="yellow" strokeWidth={1} opacity={0.5} />
                     )}
