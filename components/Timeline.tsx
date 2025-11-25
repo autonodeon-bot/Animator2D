@@ -1,7 +1,7 @@
 
 import React, { useRef, useEffect, useState } from 'react';
 import { TimelineMode, AnimationClip, EasingType, Bone, LoopRange } from '../types';
-import { Play, Pause, PlusCircle, ZoomIn, ZoomOut, CircleDot, ChevronDown, ChevronUp, Activity, StepBack, StepForward, SkipBack, SkipForward, Repeat } from 'lucide-react';
+import { Play, Pause, PlusCircle, ZoomIn, ZoomOut, CircleDot, ChevronDown, ChevronUp, Activity, StepBack, StepForward, SkipBack, SkipForward, Repeat, ArrowRightToLine, ArrowLeftToLine } from 'lucide-react';
 
 interface TimelineProps {
   mode: TimelineMode;
@@ -46,6 +46,7 @@ export const Timeline: React.FC<TimelineProps> = ({
   const [collapsed, setCollapsed] = useState(false);
   const [draggingKey, setDraggingKey] = useState<{ trackIdx: number, keyIndex: number } | null>(null);
   const [isScrubbing, setIsScrubbing] = useState(false);
+  const [selectedKey, setSelectedKey] = useState<{ trackIdx: number, keyIndex: number } | null>(null);
 
   const FRAME_WIDTH = 12 * zoom;
   const HEADER_HEIGHT = 30;
@@ -134,10 +135,13 @@ export const Timeline: React.FC<TimelineProps> = ({
 
             // Render Keys
             if (track.keyframes) {
-                track.keyframes.forEach(kf => {
+                track.keyframes.forEach((kf, kIdx) => {
                     const kx = SIDEBAR_WIDTH + kf.time * FRAME_WIDTH + (FRAME_WIDTH / 2);
                     const ky = y + (ROW_HEIGHT / 2);
-                    ctx.fillStyle = kf.easing !== 'linear' ? '#facc15' : '#d8b4fe';
+                    const isSelected = selectedKey?.trackIdx === idx && selectedKey?.keyIndex === kIdx;
+
+                    ctx.fillStyle = isSelected ? '#3b82f6' : (kf.easing !== 'linear' ? '#facc15' : '#d8b4fe');
+                    
                     // Diamond shape
                     ctx.beginPath(); ctx.moveTo(kx, ky - 4); ctx.lineTo(kx + 4, ky); ctx.lineTo(kx, ky + 4); ctx.lineTo(kx - 4, ky); ctx.fill();
                 });
@@ -152,7 +156,7 @@ export const Timeline: React.FC<TimelineProps> = ({
       ctx.beginPath(); ctx.moveTo(playheadX, 0); ctx.lineTo(playheadX, height); ctx.stroke();
     };
     render();
-  }, [currentFrame, mode, clip, zoom, wrapperRef.current?.clientWidth, wrapperRef.current?.clientHeight, bones, loopRange]);
+  }, [currentFrame, mode, clip, zoom, wrapperRef.current?.clientWidth, wrapperRef.current?.clientHeight, bones, loopRange, selectedKey]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
       const rect = canvasRef.current?.getBoundingClientRect();
@@ -178,6 +182,7 @@ export const Timeline: React.FC<TimelineProps> = ({
               const keyIndex = track.keyframes.findIndex(k => Math.abs(k.time - frame) < 0.5); // Snap check
               if (keyIndex !== -1) { 
                   setDraggingKey({ trackIdx, keyIndex }); 
+                  setSelectedKey({ trackIdx, keyIndex });
                   return; 
               }
           }
@@ -185,9 +190,10 @@ export const Timeline: React.FC<TimelineProps> = ({
 
       // Start Scrubbing
       setIsScrubbing(true);
+      setSelectedKey(null);
       if (x >= SIDEBAR_WIDTH) {
           const frame = Math.max(0, (x - SIDEBAR_WIDTH) / FRAME_WIDTH);
-          setCurrentFrame(frame); // Allow float during scrub
+          setCurrentFrame(frame); 
       }
   };
 
@@ -216,7 +222,6 @@ export const Timeline: React.FC<TimelineProps> = ({
     const handleGlobalMouseUp = () => {
         setDraggingKey(null);
         setIsScrubbing(false);
-        // Snap to integer on release if desired, or keep smooth
         setCurrentFrame(Math.round(currentFrame)); 
     };
 
@@ -229,6 +234,26 @@ export const Timeline: React.FC<TimelineProps> = ({
         window.removeEventListener('mouseup', handleGlobalMouseUp);
     };
   }, [draggingKey, isScrubbing, clip, mode, currentFrame, FRAME_WIDTH, SIDEBAR_WIDTH]);
+
+  const updateEasing = (easing: EasingType) => {
+      if (selectedKey && clip) {
+          const newClip = { ...clip };
+          newClip.tracks[selectedKey.trackIdx].keyframes[selectedKey.keyIndex].easing = easing;
+          updateClip(newClip);
+      }
+  };
+
+  const jumpKey = (dir: 1 | -1) => {
+     if (!clip || !clip.tracks) return;
+     let nextFrame = dir === 1 ? Infinity : -Infinity;
+     clip.tracks.forEach(t => {
+         t.keyframes.forEach(k => {
+             if (dir === 1 && k.time > currentFrame && k.time < nextFrame) nextFrame = k.time;
+             if (dir === -1 && k.time < currentFrame && k.time > nextFrame) nextFrame = k.time;
+         });
+     });
+     if (nextFrame !== Infinity && nextFrame !== -Infinity) setCurrentFrame(nextFrame);
+  };
 
   return (
     <>
@@ -247,11 +272,13 @@ export const Timeline: React.FC<TimelineProps> = ({
            {/* Playback Controls */}
            <div className="flex bg-neutral-900 rounded p-0.5 border border-neutral-700">
                 <button onClick={() => setCurrentFrame(loopRange.enabled ? loopRange.start : 0)} className="p-1 hover:bg-neutral-800 rounded text-gray-400" title="Go to Start"><SkipBack size={12}/></button>
+                <button onClick={() => jumpKey(-1)} className="p-1 hover:bg-neutral-800 rounded text-gray-400" title="Prev Keyframe"><ArrowLeftToLine size={12}/></button>
                 <button onClick={() => setCurrentFrame(Math.max(0, Math.floor(currentFrame) - 1))} className="p-1 hover:bg-neutral-800 rounded text-gray-400" title="Step Back"><StepBack size={12}/></button>
                 <button onClick={() => setIsPlaying(!isPlaying)} className="p-1 hover:bg-neutral-800 rounded text-white mx-1">
                     {isPlaying ? <Pause size={14} fill="white" /> : <Play size={14} fill="white" />}
                 </button>
                 <button onClick={() => setCurrentFrame(Math.floor(currentFrame) + 1)} className="p-1 hover:bg-neutral-800 rounded text-gray-400" title="Step Forward"><StepForward size={12}/></button>
+                <button onClick={() => jumpKey(1)} className="p-1 hover:bg-neutral-800 rounded text-gray-400" title="Next Keyframe"><ArrowRightToLine size={12}/></button>
                 <button onClick={() => setCurrentFrame(loopRange.enabled ? loopRange.end : clip.duration)} className="p-1 hover:bg-neutral-800 rounded text-gray-400" title="Go to End"><SkipForward size={12}/></button>
            </div>
            
@@ -272,6 +299,17 @@ export const Timeline: React.FC<TimelineProps> = ({
         </div>
 
         <div className="flex items-center space-x-2">
+            {selectedKey && (
+                <div className="flex items-center gap-1 text-xs text-gray-400 mr-2 bg-neutral-900 px-2 py-0.5 rounded border border-neutral-700">
+                    <span>Easing:</span>
+                    <select value={clip.tracks[selectedKey.trackIdx].keyframes[selectedKey.keyIndex].easing} onChange={(e) => updateEasing(e.target.value as EasingType)} className="bg-transparent text-white outline-none">
+                        <option value="linear">Linear</option>
+                        <option value="ease-in">Ease In</option>
+                        <option value="ease-out">Ease Out</option>
+                        <option value="ease-in-out">Smooth</option>
+                    </select>
+                </div>
+            )}
             <div className="flex items-center bg-neutral-900 rounded border border-neutral-700 overflow-hidden">
                 <button onClick={toggleAutoKey} className={`flex items-center gap-1 px-2 py-1 text-xs ${autoKey ? 'bg-red-900/50 text-red-400' : 'text-gray-500 hover:text-gray-300'}`}><CircleDot size={12} className={autoKey ? 'fill-red-500 text-red-500' : ''} /> REC</button>
             </div>

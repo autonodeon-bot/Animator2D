@@ -109,12 +109,28 @@ const App: React.FC = () => {
     return () => cancelAnimationFrame(raf);
   }, [isPlaying, currentClip.fps, currentClip.duration, playbackSpeed, loopRange]);
 
-  // Apply animation AND Drivers
   const animatedState = isPlaying || currentFrame > 0 ? applyAnimation(bones, sprites, currentClip, currentFrame) : { bones, sprites };
   const finalBones = evaluateDrivers(animatedState.bones); 
   const finalSprites = animatedState.sprites;
 
-  const prevFrameState = settings.onionSkin ? applyAnimation(bones, sprites, currentClip, Math.max(0, currentFrame - 1)) : null;
+  const prevFrameState = settings.onionSkin ? applyAnimation(bones, sprites, currentClip, Math.max(0, currentFrame - settings.onionSkinFrames)) : null;
+
+  const handleFitCamera = () => {
+     if (bones.length === 0) return;
+     const derived = calculateFK(bones);
+     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+     derived.forEach(b => {
+         minX = Math.min(minX, b.worldStart.x, b.worldEnd.x);
+         minY = Math.min(minY, b.worldStart.y, b.worldEnd.y);
+         maxX = Math.max(maxX, b.worldStart.x, b.worldEnd.x);
+         maxY = Math.max(maxY, b.worldStart.y, b.worldEnd.y);
+     });
+     const width = maxX - minX;
+     const height = maxY - minY;
+     const midX = minX + width/2;
+     const midY = minY + height/2;
+     setCamera({ x: midX, y: midY, zoom: Math.min(1, 600 / Math.max(width, height)), rotation: 0 }); 
+  };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -126,7 +142,7 @@ const App: React.FC = () => {
       if (e.key.toLowerCase() === 'r' && !e.ctrlKey) setTransformMode('ROTATE');
       if (e.key.toLowerCase() === 'h' && !e.shiftKey) setShowHelp(prev => !prev);
       if (e.key.toLowerCase() === 'h' && e.shiftKey) setIsolateMode(prev => !prev);
-      if (e.key.toLowerCase() === 'f') handleFocusSelection();
+      if (e.key.toLowerCase() === 'f') handleFitCamera();
       
       // Step Frames
       if (e.key === ',' || e.key === '<') setCurrentFrame(Math.max(0, currentFrame - 1));
@@ -139,17 +155,6 @@ const App: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => { window.removeEventListener('keydown', handleKeyDown); };
   }, [selection, bones, sprites, historyIndex, currentFrame]);
-
-  const handleFocusSelection = () => {
-      if (selection?.type === 'BONE') {
-          const derived = calculateFK(bones);
-          const target = derived.find(b => b.id === selection.id);
-          if (target) setCamera({ ...camera, x: target.worldStart.x, y: target.worldStart.y });
-      } else if (selection?.type === 'SPRITE') {
-          // Centering on sprite offset requires calculating its world pos, simplified here
-          setCamera({ ...camera, x: 0, y: 0 }); 
-      }
-  };
 
   const updateBone = (id: string, updates: Partial<Bone>) => {
     const updatedBones = bones.map(b => b.id === id ? { ...b, ...updates } : b);
@@ -325,11 +330,24 @@ const App: React.FC = () => {
                 onUnlockAll={() => setBones(prev => prev.map(b => ({ ...b, locked: false })))}
                 onShowAll={() => setBones(prev => prev.map(b => ({ ...b, visible: true })))}
                 onImportRef={handleImportRef}
+                backgroundColor={settings.backgroundColor}
+                setBackgroundColor={(c) => setSettings(s => ({...s, backgroundColor: c}))}
+                boneThickness={settings.boneThickness}
+                setBoneThickness={(t) => setSettings(s => ({...s, boneThickness: t}))}
+                onionFrames={settings.onionSkinFrames}
+                setOnionFrames={(f) => setSettings(s => ({...s, onionSkinFrames: f}))}
+                onInverseSelection={() => {
+                    if (selection && selection.type === 'BONE') {
+                         const idx = bones.findIndex(b => b.id === selection.id);
+                         const next = bones[(idx + 1) % bones.length];
+                         setSelection({ type: 'BONE', id: next.id });
+                    }
+                }}
             />
         </div>
       </header>
       <div className="flex flex-1 overflow-hidden">
-        <Toolbar mode={mode} setMode={setMode} transformMode={transformMode} setTransformMode={setTransformMode} onSave={handleSaveProject} onHelp={() => setShowHelp(true)} />
+        <Toolbar mode={mode} setMode={setMode} transformMode={transformMode} setTransformMode={setTransformMode} onSave={handleSaveProject} onHelp={() => setShowHelp(true)} onFitCamera={handleFitCamera} />
         <Outliner bones={bones} sprites={sprites} selection={selection} setSelection={setSelection} toggleVisibility={toggleVisibility} toggleLock={toggleLock} />
         <div className="flex-1 flex flex-col min-w-0 relative">
           <Viewport 
@@ -373,7 +391,7 @@ const App: React.FC = () => {
             setLoopRange={setLoopRange}
           />
         </div>
-        <Properties selection={selection} bones={bones} sprites={sprites} updateBone={updateBone} updateSprite={updateSprite} onAttachSprite={(bid) => attachSpriteToBone(bid)} onDelete={handleDeleteSelection} />
+        <Properties selection={selection} setSelection={setSelection} bones={bones} sprites={sprites} updateBone={updateBone} updateSprite={updateSprite} onAttachSprite={(bid) => attachSpriteToBone(bid)} onDelete={handleDeleteSelection} />
       </div>
       <div className="h-6 bg-neutral-900 border-t border-neutral-700 flex items-center px-4 text-[10px] text-gray-500 justify-between select-none">
         <div className="flex space-x-4"><span className={isPlaying ? 'text-green-500' : ''}>Status: {isPlaying ? 'PLAYING' : 'IDLE'}</span><span>Frame: {Math.round(currentFrame)}</span><span>Mode: {mode}</span><span className={autoKey ? 'text-red-500 font-bold' : ''}>{autoKey ? 'AUTOKEY: ON' : ''}</span></div>

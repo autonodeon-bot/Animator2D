@@ -55,7 +55,6 @@ export const Viewport: React.FC<ViewportProps> = ({
     startX: number;
     startY: number;
     initialVal: any; 
-    // For angular rotation
     pivot?: Vector2;
     startAngle?: number;
     currentPoints?: {x: number, y: number}[];
@@ -100,7 +99,6 @@ export const Viewport: React.FC<ViewportProps> = ({
       }
   }, [triggerSnapshot, onSnapshot]);
 
-
   const getCursor = () => {
       if (mode === ToolMode.DRAW) return 'crosshair';
       if (dragState?.active) return 'grabbing';
@@ -112,7 +110,6 @@ export const Viewport: React.FC<ViewportProps> = ({
       return 'default';
   };
 
-  // Convert Screen Mouse (Pixel) to World Space (SVG Units)
   const getLocalMouse = (clientX: number, clientY: number) => {
      const rect = svgRef.current?.getBoundingClientRect();
      if (!rect) return { x: 0, y: 0 };
@@ -120,16 +117,13 @@ export const Viewport: React.FC<ViewportProps> = ({
      const centerX = rect.width / 2;
      const centerY = rect.height / 2;
      
-     // Mouse relative to center of SVG
      const mx = clientX - rect.left - centerX;
      const my = clientY - rect.top - centerY;
      
-     // Un-rotate camera
-     const camRad = degToRad(-camera.rotation); // Negative because SVG rotate is clockwise
+     const camRad = degToRad(-camera.rotation); 
      const unrotX = mx * Math.cos(-camRad) - my * Math.sin(-camRad);
      const unrotY = mx * Math.sin(-camRad) + my * Math.cos(-camRad);
      
-     // Un-scale and Un-translate
      return { 
          x: (unrotX / camera.zoom) + camera.x, 
          y: (unrotY / camera.zoom) + camera.y 
@@ -159,9 +153,7 @@ export const Viewport: React.FC<ViewportProps> = ({
             const derivedBone = derivedBones.find(b => b.id === id);
             
             if (bone && derivedBone && !bone.locked) {
-                 // For Rotation: Calculate initial angle relative to bone start
                  const angleToMouse = Math.atan2(mousePos.y - derivedBone.worldStart.y, mousePos.x - derivedBone.worldStart.x);
-                 
                  setDragState({ 
                      active: true, 
                      type: 'bone', 
@@ -185,14 +177,12 @@ export const Viewport: React.FC<ViewportProps> = ({
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!dragState || !dragState.active) return;
     
-    // Screen delta
     const dx = e.clientX - dragState.startX;
     const dy = e.clientY - dragState.startY;
 
     if (dragState.type === 'camera') {
         const rad = degToRad(camera.rotation);
         const cos = Math.cos(rad); const sin = Math.sin(rad);
-        // Correct rotation logic for camera pan
         const rdx = (dx * cos + dy * sin) / camera.zoom;
         const rdy = (-dx * sin + dy * cos) / camera.zoom;
         setCamera(prev => ({ ...prev, x: dragState.initialVal.x - rdx, y: dragState.initialVal.y - rdy }));
@@ -209,10 +199,8 @@ export const Viewport: React.FC<ViewportProps> = ({
 
       if (transformMode === 'TRANSLATE') {
          if (bone.parentId === null) {
-             // Root movement
              updateBone(bone.id, { x: snap(worldMouse.x), y: snap(worldMouse.y) });
          } else {
-             // IK Movement
              const solvedBones = solveIK(bones, bone.id, worldMouse);
              solvedBones.forEach(sb => {
                  const original = bones.find(b => b.id === sb.id);
@@ -220,11 +208,9 @@ export const Viewport: React.FC<ViewportProps> = ({
              });
          }
       } else {
-         // Angular Rotation Logic (Intuitive)
          if (dragState.pivot && dragState.startAngle !== undefined) {
              const currentAngle = Math.atan2(worldMouse.y - dragState.pivot.y, worldMouse.x - dragState.pivot.x);
              const angleDiff = radToDeg(currentAngle - dragState.startAngle);
-             
              let newRot = dragState.initialVal.rotation + angleDiff;
              if (settings.snapToGrid) newRot = Math.round(newRot / 15) * 15;
              updateBone(bone.id, { rotation: newRot });
@@ -236,25 +222,16 @@ export const Viewport: React.FC<ViewportProps> = ({
         const parentBone = derivedBones.find(b => b.id === sprite?.boneId);
         
         if (sprite && parentBone) {
-            // We need to transform the SCREEN delta into BONE LOCAL space
-            
-            // 1. Un-scale camera zoom
+            // Fix: Project screen delta onto bone's local coordinate system
             const zoomDx = dx / camera.zoom;
             const zoomDy = dy / camera.zoom;
-
-            // 2. We need to account for Camera Rotation AND Bone Rotation
-            // Total visual rotation = Bone World Rotation - Camera Rotation
-            // Note: Camera rotation affects the viewport, so we usually just need Bone World Rotation relative to World axes
             
-            // Actually, getLocalMouse handles camera. So let's just use world coordinates difference
-            const worldMouseStart = getLocalMouse(dragState.startX, dragState.startY);
-            const worldMouseCurrent = getLocalMouse(e.clientX, e.clientY);
-            
-            const worldDx = worldMouseCurrent.x - worldMouseStart.x;
-            const worldDy = worldMouseCurrent.y - worldMouseStart.y;
+            // Adjust for Camera Rotation first
+            const camRad = degToRad(-camera.rotation);
+            const worldDx = zoomDx * Math.cos(camRad) - zoomDy * Math.sin(camRad);
+            const worldDy = zoomDx * Math.sin(camRad) + zoomDy * Math.cos(camRad);
 
-            // 3. Project world delta onto bone local axes
-            // Rotate the vector (worldDx, worldDy) by -BoneRotation
+            // Project onto Bone Local Axis (inverse rotate by bone world rotation)
             const boneRad = degToRad(-parentBone.worldRotation);
             const localDx = worldDx * Math.cos(boneRad) - worldDy * Math.sin(boneRad);
             const localDy = worldDx * Math.sin(boneRad) + worldDy * Math.cos(boneRad);

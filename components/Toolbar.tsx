@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { ToolMode, TransformMode } from '../types';
-import { MousePointer2, Move, RotateCw, Camera, Save, HelpCircle, PenTool, Grid } from 'lucide-react';
+import { MousePointer2, Move, RotateCw, Camera, Save, HelpCircle, PenTool, Grid, Maximize } from 'lucide-react';
 
 interface ToolbarProps {
   mode: ToolMode;
@@ -10,6 +10,7 @@ interface ToolbarProps {
   setTransformMode: (m: TransformMode) => void;
   onSave: () => void;
   onHelp: () => void;
+  onFitCamera: () => void;
 }
 
 export const Toolbar: React.FC<ToolbarProps> = ({
@@ -18,7 +19,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   transformMode,
   setTransformMode,
   onSave,
-  onHelp
+  onHelp,
+  onFitCamera
 }) => {
   
   const btnClass = (active: boolean) => 
@@ -84,6 +86,14 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       >
         <Camera size={20} />
         <span className="absolute left-full ml-2 bg-black text-white text-xs px-2 py-1 rounded hidden group-hover:block whitespace-nowrap z-50">Camera</span>
+      </button>
+
+      <button 
+        onClick={onFitCamera}
+        className="p-3 rounded-lg mb-2 bg-neutral-800 text-gray-400 hover:bg-neutral-700 hover:text-white"
+        title="Fit Camera (F)"
+      >
+        <Maximize size={20} />
       </button>
 
       <div className="flex-1"></div>

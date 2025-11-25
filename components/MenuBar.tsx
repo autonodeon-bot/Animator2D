@@ -1,6 +1,6 @@
 
 import React, { useRef } from 'react';
-import { FolderOpen, Image as ImageIcon, Save, Video, Grid, Eye, Copy, ClipboardPaste, Undo, Redo, Layers, HelpCircle, Share, Camera, FileImage, Ruler, Unlock, Activity } from 'lucide-react';
+import { FolderOpen, Image as ImageIcon, Save, Video, Grid, Eye, Copy, ClipboardPaste, Undo, Redo, Layers, HelpCircle, Share, Camera, FileImage, Ruler, Unlock, Activity, RefreshCw } from 'lucide-react';
 
 interface MenuBarProps {
   onImportSprite: (file: File) => void;
@@ -29,6 +29,13 @@ interface MenuBarProps {
   onUnlockAll: () => void;
   onShowAll: () => void;
   onImportRef: (file: File) => void;
+  backgroundColor: string;
+  setBackgroundColor: (c: string) => void;
+  boneThickness: number;
+  setBoneThickness: (t: number) => void;
+  onionFrames: number;
+  setOnionFrames: (f: number) => void;
+  onInverseSelection: () => void;
 }
 
 export const MenuBar: React.FC<MenuBarProps> = ({
@@ -57,7 +64,14 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   isIsolate,
   onUnlockAll,
   onShowAll,
-  onImportRef
+  onImportRef,
+  backgroundColor,
+  setBackgroundColor,
+  boneThickness,
+  setBoneThickness,
+  onionFrames,
+  setOnionFrames,
+  onInverseSelection
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const projectInputRef = useRef<HTMLInputElement>(null);
@@ -94,6 +108,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
            <div className="h-px bg-neutral-700 my-1"></div>
            <div onClick={onUnlockAll} className="px-4 py-2 hover:bg-blue-600 flex items-center gap-2 cursor-pointer"><Unlock size={12} /> Unlock All</div>
            <div onClick={onShowAll} className="px-4 py-2 hover:bg-blue-600 flex items-center gap-2 cursor-pointer"><Eye size={12} /> Show All</div>
+           <div onClick={onInverseSelection} className="px-4 py-2 hover:bg-blue-600 flex items-center gap-2 cursor-pointer"><RefreshCw size={12} /> Inverse Selection</div>
         </div>
       </div>
 
@@ -104,9 +119,31 @@ export const MenuBar: React.FC<MenuBarProps> = ({
            <div onClick={toggleBones} className="px-4 py-2 hover:bg-blue-600 flex items-center gap-2 cursor-pointer"><Eye size={12} /> {showBones ? 'Hide Bones' : 'Show Bones'}</div>
            <div onClick={toggleRulers} className="px-4 py-2 hover:bg-blue-600 flex items-center gap-2 cursor-pointer"><Ruler size={12} /> {showRulers ? 'Hide Rulers' : 'Show Rulers'}</div>
            <div onClick={toggleMotionPaths} className="px-4 py-2 hover:bg-blue-600 flex items-center gap-2 cursor-pointer"><Activity size={12} /> {showMotionPaths ? 'Hide Motion Paths' : 'Show Motion Paths'}</div>
-           <div onClick={toggleOnion} className="px-4 py-2 hover:bg-blue-600 flex items-center gap-2 cursor-pointer"><Layers size={12} /> {isOnion ? 'Hide Onion Skin' : 'Show Onion Skin'}</div>
+           
+           <div className="h-px bg-neutral-700 my-1"></div>
+           <div className="px-4 py-2 flex items-center justify-between">
+              <span>Onion Skin</span>
+              <button onClick={toggleOnion} className={`w-8 h-4 rounded-full ${isOnion ? 'bg-green-500' : 'bg-gray-600'}`}></button>
+           </div>
+           {isOnion && <div className="px-4 py-1 flex items-center justify-between text-[10px] text-gray-400">
+               <span>Frames:</span>
+               <div className="flex bg-neutral-900 rounded">
+                   {[1,3,5].map(n => <button key={n} onClick={() => setOnionFrames(n)} className={`px-2 ${onionFrames === n ? 'bg-blue-600 text-white' : ''}`}>{n}</button>)}
+               </div>
+           </div>}
+
            <div className="h-px bg-neutral-700 my-1"></div>
            <div onClick={toggleIsolate} className="px-4 py-2 hover:bg-blue-600 flex items-center gap-2 cursor-pointer text-orange-400">{isIsolate ? 'Exit Isolate Mode (Shift+H)' : 'Isolate Selection (Shift+H)'}</div>
+
+           <div className="h-px bg-neutral-700 my-1"></div>
+           <div className="px-4 py-2">
+               <span className="block mb-1 text-gray-400">Background Color</span>
+               <input type="color" value={backgroundColor} onChange={(e) => setBackgroundColor(e.target.value)} className="w-full h-6 bg-transparent cursor-pointer" />
+           </div>
+           <div className="px-4 py-2">
+               <span className="block mb-1 text-gray-400">Bone Thickness</span>
+               <input type="range" min="5" max="50" value={boneThickness} onChange={(e) => setBoneThickness(parseInt(e.target.value))} className="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer" />
+           </div>
         </div>
       </div>
 

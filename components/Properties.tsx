@@ -1,10 +1,11 @@
 
 import React, { useState } from 'react';
 import { Bone, Sprite, Selection, Constraint, Driver } from '../types';
-import { Cuboid, Crosshair, Image as ImageIcon, Trash2, Anchor, Activity, Grid, Plus, Settings, X, AlignCenterHorizontal, AlignCenterVertical, ArrowLeftRight, ArrowUpDown } from 'lucide-react';
+import { Cuboid, Crosshair, Image as ImageIcon, Trash2, Anchor, Activity, Grid, Plus, Settings, X, AlignCenterHorizontal, AlignCenterVertical, ArrowLeftRight, ArrowUpDown, ChevronUp, ChevronDown, Layers } from 'lucide-react';
 
 interface PropertiesProps {
   selection: Selection | null;
+  setSelection: (s: Selection | null) => void;
   bones: Bone[];
   sprites: Sprite[];
   updateBone: (id: string, updates: Partial<Bone>) => void;
@@ -15,6 +16,7 @@ interface PropertiesProps {
 
 export const Properties: React.FC<PropertiesProps> = ({ 
   selection,
+  setSelection,
   bones,
   sprites,
   updateBone,
@@ -39,6 +41,8 @@ export const Properties: React.FC<PropertiesProps> = ({
       const bone = bones ? bones.find(b => b.id === selection.id) : null;
       if (!bone) return null;
       const attachedSprite = sprites ? sprites.find(s => s.boneId === bone.id) : null;
+      const parent = bones.find(b => b.id === bone.parentId);
+      const child = bones.find(b => b.parentId === bone.id);
 
       const addConstraint = (type: Constraint['type']) => {
           const newC: Constraint = { id: Date.now().toString(), type, min: -45, max: 45, influence: 1 };
@@ -47,11 +51,6 @@ export const Properties: React.FC<PropertiesProps> = ({
       
       const removeConstraint = (cid: string) => {
           updateBone(bone.id, { constraints: bone.constraints?.filter(c => c.id !== cid) });
-      };
-
-      const addDriver = () => {
-         const newD: Driver = { id: Date.now().toString(), driverProperty: 'rotation', sourceBoneId: bone.parentId || '', sourceProperty: 'rotation', factor: 0.5, offset: 0 };
-         updateBone(bone.id, { drivers: [...(bone.drivers || []), newD] });
       };
 
       return (
@@ -63,6 +62,12 @@ export const Properties: React.FC<PropertiesProps> = ({
             </div>
             
             <div className="p-4 space-y-6">
+                 {/* Navigation */}
+                 <div className="flex gap-2">
+                     <button onClick={() => parent && setSelection({type:'BONE', id: parent.id})} disabled={!parent} className="flex-1 bg-neutral-800 p-1 rounded text-xs flex items-center justify-center gap-1 disabled:opacity-30"><ChevronUp size={12}/> Parent</button>
+                     <button onClick={() => child && setSelection({type:'BONE', id: child.id})} disabled={!child} className="flex-1 bg-neutral-800 p-1 rounded text-xs flex items-center justify-center gap-1 disabled:opacity-30"><ChevronDown size={12}/> Child</button>
+                 </div>
+
                 <div className="space-y-2">
                     <label className="text-xs font-bold text-gray-400 uppercase">Name</label>
                     <input type="text" value={bone.name} onChange={(e) => updateBone(bone.id, { name: e.target.value })} className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-white outline-none" />
@@ -105,7 +110,6 @@ export const Properties: React.FC<PropertiesProps> = ({
                          ))}
                     </div>
                 )}
-                 {/* Drivers tab omitted for brevity but remains same structure */}
             </div>
         </div>
       );
@@ -130,6 +134,24 @@ export const Properties: React.FC<PropertiesProps> = ({
             <div className="p-4 space-y-6">
                 <div className="flex justify-center bg-neutral-800 p-4 rounded border border-neutral-700"><img src={sprite.imageUrl} className="h-32 object-contain" alt="Preview" /></div>
                 
+                <div className="space-y-3">
+                    <label className="text-xs font-bold text-gray-400 uppercase border-b border-neutral-700 block pb-1">Appearance</label>
+                    <div className="flex items-center gap-2">
+                        <span className="text-gray-500 w-16">Opacity</span>
+                        <input type="range" min="0" max="1" step="0.01" value={sprite.opacity} onChange={(e) => updateSprite(sprite.id, { opacity: parseFloat(e.target.value) })} className="flex-1" />
+                        <span className="text-xs w-8 text-right">{Math.round(sprite.opacity * 100)}%</span>
+                    </div>
+                    
+                    <div className="flex items-center gap-2 justify-between">
+                         <span className="text-gray-500">Layer Order</span>
+                         <div className="flex gap-1">
+                             <button onClick={() => updateSprite(sprite.id, { zIndex: sprite.zIndex - 1 })} className="p-1 bg-neutral-700 rounded hover:bg-neutral-600" title="Send Backward"><ChevronDown size={14}/></button>
+                             <span className="text-xs w-8 text-center py-1 bg-neutral-900 rounded">{sprite.zIndex}</span>
+                             <button onClick={() => updateSprite(sprite.id, { zIndex: sprite.zIndex + 1 })} className="p-1 bg-neutral-700 rounded hover:bg-neutral-600" title="Bring Forward"><ChevronUp size={14}/></button>
+                         </div>
+                    </div>
+                </div>
+
                 <div className="space-y-3">
                     <label className="text-xs font-bold text-gray-400 uppercase border-b border-neutral-700 block pb-1">Transform</label>
                     <div className="grid grid-cols-2 gap-2 items-center"><span className="text-gray-500">Offset X</span><input type="number" value={Math.round(sprite.offsetX)} onChange={(e) => updateSprite(sprite.id, { offsetX: parseFloat(e.target.value) })} className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-right text-white" /></div>
