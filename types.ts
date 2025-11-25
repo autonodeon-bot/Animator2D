@@ -148,13 +148,32 @@ export interface CameraState {
   rotation: number;
 }
 
+export interface ReferenceImage {
+    id: string;
+    url: string;
+    x: number;
+    y: number;
+    scale: number;
+    opacity: number;
+    visible: boolean;
+}
+
+export interface LoopRange {
+    enabled: boolean;
+    start: number;
+    end: number;
+}
+
 export interface AppSettings {
   showGrid: boolean;
   snapToGrid: boolean;
   showBones: boolean;
+  showRulers: boolean; // NEW
+  showMotionPaths: boolean; // NEW
   onionSkin: boolean;
   onionSkinFrames: number;
   backgroundColor: string;
+  boneThickness: number; // NEW
 }
 
 export type SelectionType = 'BONE' | 'SPRITE' | 'VERTEX';

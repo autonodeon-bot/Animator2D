@@ -216,23 +216,34 @@ export const applyAnimation = (bones: Bone[], sprites: Sprite[], clip: Animation
   });
 
   // Apply Constraints & Drivers after raw animation
-  const derived = calculateFK(newBones); // This runs constraint logic internally and returns derived, 
-  // but we need the local rotations back in the 'bones' array for the UI to update correctly.
-  // A true ECS system would separate these, but here we map back:
+  const derived = calculateFK(newBones); 
   const finalBones = newBones.map(b => {
       const d = derived.find(db => db.id === b.id);
       return d ? { ...b, rotation: d.rotation, x: d.x, y: d.y } : b;
   });
 
   const newSprites = sprites.map(sprite => {
-      // Check for Variant Swap keys
-      // We treat sprite tracks by boneId usually, but maybe track should allow spriteId
-      // For now, let's assume tracks can target sprites by using sprite ID in boneId field (legacy) OR we iterate tracks
-      // Simpler: Tracks specifically for sprites
       return sprite; 
   });
 
   return { bones: finalBones, sprites: newSprites };
+};
+
+// --- Calculate Motion Path ---
+export const calculateMotionPath = (bones: Bone[], sprites: Sprite[], clip: AnimationClip, targetBoneId: string): Vector2[] => {
+    const points: Vector2[] = [];
+    const step = 2; // Sample every 2 frames for performance
+    
+    // We only calculate for the duration of the clip
+    for(let f = 0; f <= clip.duration; f += step) {
+        const state = applyAnimation(bones, sprites, clip, f);
+        const derived = calculateFK(state.bones);
+        const target = derived.find(b => b.id === targetBoneId);
+        if (target) {
+            points.push({ x: target.worldStart.x, y: target.worldStart.y });
+        }
+    }
+    return points;
 };
 
 // --- Rendering ---
@@ -255,18 +266,15 @@ export const renderFrameToCanvas = async (
     const bone = derivedBones.find(b => b.id === sprite.boneId);
     if (!bone || bone.visible === false) continue;
 
-    // Handle Clipping
     if (sprite.clipId) {
         const clipSprite = sprites.find(s => s.id === sprite.clipId);
         const clipBone = clipSprite ? derivedBones.find(b => b.id === clipSprite.boneId) : null;
         if (clipSprite && clipBone) {
             ctx.save();
             ctx.beginPath();
-            // Simplified Rect Clip for now
-            // In a real engine, we'd use the clipSprite's image alpha channel
             ctx.translate(center.x + clipBone.worldStart.x, center.y + clipBone.worldStart.y);
             ctx.rotate(degToRad(clipBone.worldRotation));
-            ctx.rect(clipSprite.offsetX - 50, clipSprite.offsetY - 50, 100, 100); // Approx
+            ctx.rect(clipSprite.offsetX - 50, clipSprite.offsetY - 50, 100, 100); 
             ctx.clip();
         }
     }
@@ -276,10 +284,6 @@ export const renderFrameToCanvas = async (
     await new Promise((resolve) => { if (img.complete) resolve(null); else img.onload = () => resolve(null); });
 
     ctx.save();
-    if (!sprite.clipId) {
-        // Only apply standard transform if not already inside a clip block (simplified logic)
-    }
-    
     ctx.translate(center.x + bone.worldStart.x, center.y + bone.worldStart.y);
     ctx.rotate(degToRad(bone.worldRotation));
     ctx.translate(sprite.offsetX, sprite.offsetY);

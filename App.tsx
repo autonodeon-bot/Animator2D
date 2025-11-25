@@ -6,8 +6,8 @@ import { Properties } from './components/Properties';
 import { Outliner } from './components/Outliner';
 import { MenuBar } from './components/MenuBar';
 import { Toolbar } from './components/Toolbar';
-import { Bone, ToolMode, TimelineMode, CameraState, AnimationClip, Sprite, ProjectFile, AppSettings, Selection, HistoryState, TransformMode, DrawingStroke } from './types';
-import { applyAnimation, renderFrameToCanvas, createHumanRig, createWalkCycle, createDummySprites, evaluateDrivers, exportGameData } from './utils';
+import { Bone, ToolMode, TimelineMode, CameraState, AnimationClip, Sprite, ProjectFile, AppSettings, Selection, HistoryState, TransformMode, DrawingStroke, ReferenceImage, LoopRange, Vector2 } from './types';
+import { applyAnimation, renderFrameToCanvas, createHumanRig, createWalkCycle, createDummySprites, evaluateDrivers, exportGameData, calculateMotionPath, calculateFK } from './utils';
 
 const INITIAL_BONES: Bone[] = createHumanRig();
 const INITIAL_CLIP: AnimationClip = createWalkCycle();
@@ -23,19 +23,25 @@ const App: React.FC = () => {
   const [transformMode, setTransformMode] = useState<TransformMode>('ROTATE');
   const [timelineMode, setTimelineMode] = useState<TimelineMode>(TimelineMode.CLIP);
   const [camera, setCamera] = useState<CameraState>({ x: 0, y: 0, zoom: 1, rotation: 0 });
-  const [settings, setSettings] = useState<AppSettings>({ showGrid: true, snapToGrid: false, showBones: true, onionSkin: false, onionSkinFrames: 1, backgroundColor: '#151515' });
+  const [settings, setSettings] = useState<AppSettings>({ showGrid: true, snapToGrid: false, showBones: true, showRulers: false, showMotionPaths: false, onionSkin: false, onionSkinFrames: 1, backgroundColor: '#151515', boneThickness: 20 });
+  
+  const [referenceImage, setReferenceImage] = useState<ReferenceImage | null>(null);
   const [uploadedImages, setUploadedImages] = useState<string[]>([]);
   const [showHelp, setShowHelp] = useState(false);
   const [autoKey, setAutoKey] = useState(false);
+  const [isolateMode, setIsolateMode] = useState(false);
 
+  // Timeline State
   const [currentFrame, setCurrentFrame] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const [loopRange, setLoopRange] = useState<LoopRange>({ enabled: false, start: 0, end: 96 });
+  
   const lastFrameTime = useRef(0);
   
   const [history, setHistory] = useState<HistoryState[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
-  
-  const isShiftDown = useRef(false);
+  const [triggerSnapshot, setTriggerSnapshot] = useState(false);
 
   useEffect(() => {
       setSprites(createDummySprites());
@@ -54,13 +60,16 @@ const App: React.FC = () => {
 
   useEffect(() => { if (history.length === 0) pushHistory(); }, []);
 
+  // Motion Path Calculation
+  const [motionPath, setMotionPath] = useState<Vector2[]>([]);
   useEffect(() => {
-      const interval = setInterval(() => {
-          const project: ProjectFile = { version: '2.0', bones, sprites, meshes: [], drawings, clips: [currentClip] };
-          localStorage.setItem('animator-autosave', JSON.stringify(project));
-      }, 30000);
-      return () => clearInterval(interval);
-  }, [bones, sprites, drawings, currentClip]);
+      if (settings.showMotionPaths && selection?.type === 'BONE') {
+          setMotionPath(calculateMotionPath(bones, sprites, currentClip, selection.id));
+      } else {
+          setMotionPath([]);
+      }
+  }, [settings.showMotionPaths, selection, bones, currentClip]);
+
 
   const handleUndo = () => {
       if (historyIndex > 0) {
@@ -82,8 +91,15 @@ const App: React.FC = () => {
     let raf: number;
     if (isPlaying) {
         const loop = (time: number) => {
-            if (time - lastFrameTime.current > (1000 / currentClip.fps)) {
-                setCurrentFrame(f => f >= currentClip.duration ? 0 : f + 1);
+            const interval = (1000 / currentClip.fps) / playbackSpeed;
+            if (time - lastFrameTime.current > interval) {
+                setCurrentFrame(f => {
+                    const next = f + 1;
+                    if (loopRange.enabled) {
+                        return next > loopRange.end ? loopRange.start : next;
+                    }
+                    return next >= currentClip.duration ? 0 : next;
+                });
                 lastFrameTime.current = time;
             }
             raf = requestAnimationFrame(loop);
@@ -91,11 +107,11 @@ const App: React.FC = () => {
         raf = requestAnimationFrame(loop);
     }
     return () => cancelAnimationFrame(raf);
-  }, [isPlaying, currentClip.fps, currentClip.duration]);
+  }, [isPlaying, currentClip.fps, currentClip.duration, playbackSpeed, loopRange]);
 
   // Apply animation AND Drivers
   const animatedState = isPlaying || currentFrame > 0 ? applyAnimation(bones, sprites, currentClip, currentFrame) : { bones, sprites };
-  const finalBones = evaluateDrivers(animatedState.bones); // Apply drivers live
+  const finalBones = evaluateDrivers(animatedState.bones); 
   const finalSprites = animatedState.sprites;
 
   const prevFrameState = settings.onionSkin ? applyAnimation(bones, sprites, currentClip, Math.max(0, currentFrame - 1)) : null;
@@ -108,16 +124,32 @@ const App: React.FC = () => {
       if (e.key.toLowerCase() === 'd') setMode(ToolMode.DRAW);
       if (e.key.toLowerCase() === 'g') setTransformMode('TRANSLATE');
       if (e.key.toLowerCase() === 'r' && !e.ctrlKey) setTransformMode('ROTATE');
-      if (e.key.toLowerCase() === 'h') setShowHelp(prev => !prev);
-      if (e.key === 'Shift') isShiftDown.current = true;
+      if (e.key.toLowerCase() === 'h' && !e.shiftKey) setShowHelp(prev => !prev);
+      if (e.key.toLowerCase() === 'h' && e.shiftKey) setIsolateMode(prev => !prev);
+      if (e.key.toLowerCase() === 'f') handleFocusSelection();
+      
+      // Step Frames
+      if (e.key === ',' || e.key === '<') setCurrentFrame(Math.max(0, currentFrame - 1));
+      if (e.key === '.' || e.key === '>') setCurrentFrame(currentFrame + 1);
+
       if (e.key === 'Delete') handleDeleteSelection();
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? handleRedo() : handleUndo(); }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); handleRedo(); }
     };
-    const handleKeyUp = (e: KeyboardEvent) => { if (e.key === 'Shift') isShiftDown.current = false; };
-    window.addEventListener('keydown', handleKeyDown); window.addEventListener('keyup', handleKeyUp);
-    return () => { window.removeEventListener('keydown', handleKeyDown); window.removeEventListener('keyup', handleKeyUp); };
-  }, [selection, bones, sprites, historyIndex]);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => { window.removeEventListener('keydown', handleKeyDown); };
+  }, [selection, bones, sprites, historyIndex, currentFrame]);
+
+  const handleFocusSelection = () => {
+      if (selection?.type === 'BONE') {
+          const derived = calculateFK(bones);
+          const target = derived.find(b => b.id === selection.id);
+          if (target) setCamera({ ...camera, x: target.worldStart.x, y: target.worldStart.y });
+      } else if (selection?.type === 'SPRITE') {
+          // Centering on sprite offset requires calculating its world pos, simplified here
+          setCamera({ ...camera, x: 0, y: 0 }); 
+      }
+  };
 
   const updateBone = (id: string, updates: Partial<Bone>) => {
     const updatedBones = bones.map(b => b.id === id ? { ...b, ...updates } : b);
@@ -159,6 +191,15 @@ const App: React.FC = () => {
         setUploadedImages(prev => [...prev, url]);
         if (selection?.type === 'BONE') attachSpriteToBone(selection.id, url);
         else alert("Select a bone to attach sprite to.");
+     };
+     reader.readAsDataURL(file);
+  };
+  
+  const handleImportRef = (file: File) => {
+     const reader = new FileReader();
+     reader.onload = (e) => {
+        const url = e.target?.result as string;
+        setReferenceImage({ id: 'ref', url, x: 0, y: 0, scale: 1, opacity: 0.5, visible: true });
      };
      reader.readAsDataURL(file);
   };
@@ -245,22 +286,92 @@ const App: React.FC = () => {
     recorder.stop();
   };
 
+  const handleSnapshot = (blob: Blob) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'snapshot.png'; a.click();
+      setTriggerSnapshot(false);
+  };
+
   return (
     <div className="flex flex-col h-screen w-screen bg-black text-gray-200 font-sans overflow-hidden">
       <header className="h-10 bg-neutral-800 border-b border-neutral-700 flex items-center justify-between select-none z-50 relative">
         <div className="flex items-center h-full">
             <div className="px-4 font-bold text-orange-500 tracking-wider text-sm">ANIMATOR PRO 2.0</div>
             <div className="h-4 w-px bg-neutral-600 mx-2"></div>
-            <MenuBar onImportSprite={handleImportSprite} onSave={handleSaveProject} onLoad={handleLoadProject} onCopyPose={() => {}} onPastePose={() => {}} toggleGrid={() => setSettings(s => ({ ...s, showGrid: !s.showGrid }))} toggleBones={() => setSettings(s => ({ ...s, showBones: !s.showBones }))} showGrid={settings.showGrid} showBones={settings.showBones} onRender={handleRenderVideo} onUndo={handleUndo} onRedo={handleRedo} toggleOnion={() => setSettings(s => ({...s, onionSkin: !s.onionSkin}))} isOnion={settings.onionSkin} onOpenHelp={() => setShowHelp(true)} onExportEngine={handleExportEngine} />
+            <MenuBar 
+                onImportSprite={handleImportSprite} 
+                onSave={handleSaveProject} 
+                onLoad={handleLoadProject} 
+                onCopyPose={() => {}} 
+                onPastePose={() => {}} 
+                toggleGrid={() => setSettings(s => ({ ...s, showGrid: !s.showGrid }))} 
+                toggleBones={() => setSettings(s => ({ ...s, showBones: !s.showBones }))} 
+                toggleRulers={() => setSettings(s => ({ ...s, showRulers: !s.showRulers }))}
+                toggleMotionPaths={() => setSettings(s => ({ ...s, showMotionPaths: !s.showMotionPaths }))}
+                showGrid={settings.showGrid} 
+                showBones={settings.showBones} 
+                showRulers={settings.showRulers}
+                showMotionPaths={settings.showMotionPaths}
+                onRender={handleRenderVideo} 
+                onSnapshot={() => setTriggerSnapshot(true)}
+                onUndo={handleUndo} 
+                onRedo={handleRedo} 
+                toggleOnion={() => setSettings(s => ({...s, onionSkin: !s.onionSkin}))} 
+                isOnion={settings.onionSkin} 
+                onOpenHelp={() => setShowHelp(true)} 
+                onExportEngine={handleExportEngine} 
+                toggleIsolate={() => setIsolateMode(!isolateMode)}
+                isIsolate={isolateMode}
+                onUnlockAll={() => setBones(prev => prev.map(b => ({ ...b, locked: false })))}
+                onShowAll={() => setBones(prev => prev.map(b => ({ ...b, visible: true })))}
+                onImportRef={handleImportRef}
+            />
         </div>
       </header>
       <div className="flex flex-1 overflow-hidden">
         <Toolbar mode={mode} setMode={setMode} transformMode={transformMode} setTransformMode={setTransformMode} onSave={handleSaveProject} onHelp={() => setShowHelp(true)} />
         <Outliner bones={bones} sprites={sprites} selection={selection} setSelection={setSelection} toggleVisibility={toggleVisibility} toggleLock={toggleLock} />
         <div className="flex-1 flex flex-col min-w-0 relative">
-          <Viewport bones={finalBones} prevBones={prevFrameState?.bones || null} sprites={finalSprites} drawings={drawings} updateBone={updateBone} updateSprite={updateSprite} addDrawing={(d) => setDrawings(prev => [...prev, d])} camera={camera} setCamera={setCamera} selection={selection} setSelection={setSelection} mode={mode} transformMode={transformMode} settings={settings} />
-          {showHelp && <div className="absolute top-10 left-10 bg-neutral-800/95 backdrop-blur border border-neutral-600 p-4 rounded shadow-2xl z-50 text-xs w-64"><h3 className="font-bold text-base text-white mb-4">Shortcuts</h3><div className="grid grid-cols-2 gap-2"><span className="text-orange-400">V</span><span>Select</span><span className="text-orange-400">G</span><span>Move/IK</span><span className="text-orange-400">R</span><span>Rotate</span><span className="text-orange-400">D</span><span>Draw</span></div><button onClick={()=>setShowHelp(false)} className="mt-4 w-full bg-neutral-700 py-1 rounded">Close</button></div>}
-          <Timeline mode={timelineMode} setMode={setTimelineMode} currentFrame={currentFrame} setCurrentFrame={setCurrentFrame} clip={currentClip} updateClip={(c) => { setCurrentClip(c); pushHistory(); }} isPlaying={isPlaying} setIsPlaying={setIsPlaying} addKeyframe={addKeyframe} autoKey={autoKey} toggleAutoKey={() => setAutoKey(!autoKey)} bones={bones} />
+          <Viewport 
+            bones={finalBones} 
+            prevBones={prevFrameState?.bones || null} 
+            sprites={finalSprites} 
+            drawings={drawings} 
+            updateBone={updateBone} 
+            updateSprite={updateSprite} 
+            addDrawing={(d) => setDrawings(prev => [...prev, d])} 
+            camera={camera} 
+            setCamera={setCamera} 
+            selection={selection} 
+            setSelection={setSelection} 
+            mode={mode} 
+            transformMode={transformMode} 
+            settings={settings} 
+            referenceImage={referenceImage}
+            motionPath={motionPath}
+            isolateMode={isolateMode}
+            onSnapshot={handleSnapshot}
+            triggerSnapshot={triggerSnapshot}
+          />
+          {showHelp && <div className="absolute top-10 left-10 bg-neutral-800/95 backdrop-blur border border-neutral-600 p-4 rounded shadow-2xl z-50 text-xs w-64"><h3 className="font-bold text-base text-white mb-4">Shortcuts</h3><div className="grid grid-cols-2 gap-2"><span className="text-orange-400">V</span><span>Select</span><span className="text-orange-400">G</span><span>Move/IK</span><span className="text-orange-400">R</span><span>Rotate</span><span className="text-orange-400">D</span><span>Draw</span><span className="text-orange-400">F</span><span>Focus</span><span className="text-orange-400">Shift+H</span><span>Isolate</span><span className="text-orange-400">, / .</span><span>Step Frame</span></div><button onClick={()=>setShowHelp(false)} className="mt-4 w-full bg-neutral-700 py-1 rounded">Close</button></div>}
+          <Timeline 
+            mode={timelineMode} 
+            setMode={setTimelineMode} 
+            currentFrame={currentFrame} 
+            setCurrentFrame={setCurrentFrame} 
+            clip={currentClip} 
+            updateClip={(c) => { setCurrentClip(c); pushHistory(); }} 
+            isPlaying={isPlaying} 
+            setIsPlaying={setIsPlaying} 
+            addKeyframe={addKeyframe} 
+            autoKey={autoKey} 
+            toggleAutoKey={() => setAutoKey(!autoKey)} 
+            bones={bones} 
+            playbackSpeed={playbackSpeed}
+            setPlaybackSpeed={setPlaybackSpeed}
+            loopRange={loopRange}
+            setLoopRange={setLoopRange}
+          />
         </div>
         <Properties selection={selection} bones={bones} sprites={sprites} updateBone={updateBone} updateSprite={updateSprite} onAttachSprite={(bid) => attachSpriteToBone(bid)} onDelete={handleDeleteSelection} />
       </div>

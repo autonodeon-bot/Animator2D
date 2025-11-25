@@ -1,6 +1,6 @@
 
-import React, { useRef, useState } from 'react';
-import { Bone, ToolMode, CameraState, Sprite, AppSettings, Selection, DerivedBone, TransformMode, DrawingStroke } from '../types';
+import React, { useRef, useState, useEffect } from 'react';
+import { Bone, ToolMode, CameraState, Sprite, AppSettings, Selection, DerivedBone, TransformMode, DrawingStroke, ReferenceImage, Vector2 } from '../types';
 import { calculateFK, degToRad, solveIK } from '../utils';
 
 interface ViewportProps {
@@ -18,6 +18,11 @@ interface ViewportProps {
   mode: ToolMode;
   transformMode: TransformMode;
   settings: AppSettings;
+  referenceImage: ReferenceImage | null;
+  motionPath: Vector2[];
+  isolateMode: boolean;
+  onSnapshot: (blob: Blob) => void; // New callback for snapshot
+  triggerSnapshot: boolean; // Flag to trigger
 }
 
 export const Viewport: React.FC<ViewportProps> = ({
@@ -34,7 +39,12 @@ export const Viewport: React.FC<ViewportProps> = ({
   setSelection,
   mode,
   transformMode,
-  settings
+  settings,
+  referenceImage,
+  motionPath,
+  isolateMode,
+  onSnapshot,
+  triggerSnapshot
 }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   
@@ -51,7 +61,45 @@ export const Viewport: React.FC<ViewportProps> = ({
   const derivedBones = calculateFK(bones);
   const derivedPrevBones = prevBones ? calculateFK(prevBones) : null;
 
+  // Filter for Isolate Mode
+  const getVisibleBones = () => {
+      if (!isolateMode || !selection || selection.type !== 'BONE') return derivedBones;
+      // Show only selected bone and its children
+      const visibleIds = new Set<string>();
+      const traverse = (id: string) => {
+          visibleIds.add(id);
+          derivedBones.filter(b => b.parentId === id).forEach(c => traverse(c.id));
+      };
+      traverse(selection.id);
+      // Also show ancestors to root for context? Usually isolation shows just the branch.
+      return derivedBones.filter(b => visibleIds.has(b.id));
+  };
+  const visibleBones = getVisibleBones();
+
   const snap = (val: number) => settings.snapToGrid ? Math.round(val / 10) * 10 : val;
+
+  // Snapshot Logic
+  useEffect(() => {
+      if (triggerSnapshot && svgRef.current) {
+          const svgData = new XMLSerializer().serializeToString(svgRef.current);
+          const canvas = document.createElement("canvas");
+          const svgSize = svgRef.current.getBoundingClientRect();
+          canvas.width = svgSize.width;
+          canvas.height = svgSize.height;
+          const ctx = canvas.getContext("2d");
+          const img = new Image();
+          img.setAttribute("src", "data:image/svg+xml;base64," + btoa(svgData));
+          img.onload = () => {
+              if (ctx) {
+                ctx.drawImage(img, 0, 0);
+                canvas.toBlob(blob => {
+                    if (blob) onSnapshot(blob);
+                });
+              }
+          };
+      }
+  }, [triggerSnapshot, onSnapshot]);
+
 
   const getCursor = () => {
       if (mode === ToolMode.DRAW) return 'crosshair';
@@ -177,6 +225,9 @@ export const Viewport: React.FC<ViewportProps> = ({
      return `M ${x1} ${y1} L ${x4} ${y4} L ${x3} ${y3} L ${x2} ${y2} Z`;
   };
 
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+
   return (
     <div className="relative flex-1 bg-[#151515] overflow-hidden" style={{ cursor: getCursor() }}>
        <div className="absolute top-4 left-4 z-10 flex flex-col space-y-2 pointer-events-none select-none">
@@ -185,12 +236,24 @@ export const Viewport: React.FC<ViewportProps> = ({
                <span className={`font-bold ${mode === ToolMode.SELECT ? 'text-blue-400' : 'text-gray-500'}`}>
                    {mode === ToolMode.SELECT ? (transformMode === 'TRANSLATE' ? 'MOVE / IK [G]' : 'ROTATE [R]') : mode}
                </span>
+               {isolateMode && <span className="text-red-500 font-bold ml-2">ISOLATE</span>}
              </div>
              <div className="text-[10px] text-gray-400">
                  {selection ? `Selected: ${selection.type} ${selection.id}` : 'No Selection'}
              </div>
           </div>
        </div>
+
+       {settings.showRulers && (
+          <div className="absolute top-0 left-0 w-full h-full pointer-events-none z-0 opacity-20">
+             <div className="absolute top-1/2 left-0 w-full h-px bg-white"></div>
+             <div className="absolute top-0 left-1/2 w-px h-full bg-white"></div>
+             {/* Simple visual ticks */}
+             {[...Array(20)].map((_, i) => (
+                 <div key={i} className="absolute h-2 w-px bg-gray-500" style={{ left: '50%', transform: `translateX(${i * 100}px)` }}></div>
+             ))}
+          </div>
+       )}
 
        <svg 
          ref={svgRef}
@@ -208,7 +271,6 @@ export const Viewport: React.FC<ViewportProps> = ({
             {sprites.map(s => (
                 s.clipId ? (
                     <clipPath key={`clip_${s.id}`} id={`clip_${s.id}`}>
-                         {/* Simplified clipping region based on target sprite's box. Real impl needs alpha mask */}
                          <rect x="-50" y="-50" width="100" height="100" /> 
                     </clipPath>
                 ) : null
@@ -217,8 +279,21 @@ export const Viewport: React.FC<ViewportProps> = ({
          
          {settings.showGrid && <rect width="100%" height="100%" fill="url(#grid)" />}
 
-         <g transform={`translate(${window.innerWidth / 2}, ${window.innerHeight / 2}) scale(${camera.zoom}) rotate(${-camera.rotation}) translate(${-camera.x}, ${-camera.y})`}>
+         <g transform={`translate(${w / 2}, ${h / 2}) scale(${camera.zoom}) rotate(${-camera.rotation}) translate(${-camera.x}, ${-camera.y})`}>
             
+            {/* Reference Image */}
+            {referenceImage && referenceImage.visible && (
+                <image 
+                   href={referenceImage.url} 
+                   x={referenceImage.x - 500} // Centered approximation
+                   y={referenceImage.y - 500} 
+                   width={1000 * referenceImage.scale} 
+                   height={1000 * referenceImage.scale} 
+                   opacity={referenceImage.opacity} 
+                   className="pointer-events-none"
+                />
+            )}
+
             {/* Drawings */}
             {drawings.map(d => (
                 <polyline key={d.id} points={d.points.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke={d.color} strokeWidth={d.width} strokeLinecap="round" />
@@ -227,21 +302,24 @@ export const Viewport: React.FC<ViewportProps> = ({
                 <polyline points={dragState.currentPoints.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke="#fff" strokeWidth={2} strokeLinecap="round" />
             )}
 
+            {/* Motion Path */}
+            {settings.showMotionPaths && motionPath.length > 1 && (
+                <polyline 
+                   points={motionPath.map(p => `${p.x},${p.y}`).join(' ')} 
+                   fill="none" 
+                   stroke="yellow" 
+                   strokeWidth={2} 
+                   strokeDasharray="4 4"
+                   opacity={0.6}
+                />
+            )}
+
             {sprites.sort((a,b) => a.zIndex - b.zIndex).map(sprite => {
-                const bone = derivedBones ? derivedBones.find(b => b.id === sprite.boneId) : null;
+                const bone = visibleBones.find(b => b.id === sprite.boneId);
+                // In Isolate mode, hide sprites attached to hidden bones
                 if (!bone || bone.visible === false) return null;
                 const isSelected = selection?.type === 'SPRITE' && selection.id === sprite.id;
                 
-                // Resolve Clip Parent Transform if needed
-                let clipTransform = '';
-                if (sprite.clipId) {
-                    const clipS = sprites.find(s => s.id === sprite.clipId);
-                    const clipB = derivedBones.find(b => b.id === clipS?.boneId);
-                    if (clipB && clipS) {
-                         // This is tricky in SVG. We usually nest. For now, simplistic overlay.
-                    }
-                }
-
                 const transform = `translate(${bone.worldStart.x}, ${bone.worldStart.y}) rotate(${bone.worldRotation}) translate(${sprite.offsetX}, ${sprite.offsetY}) rotate(${sprite.rotation}) scale(${sprite.scaleX}, ${sprite.scaleY})`;
                 return (
                     <g key={sprite.id} transform={transform} style={{ opacity: sprite.opacity }} onMouseDown={(e) => handleObjectMouseDown(e, 'sprite', sprite.id)} className="pointer-events-auto">
@@ -251,7 +329,7 @@ export const Viewport: React.FC<ViewportProps> = ({
                 )
             })}
 
-            {settings.showBones && derivedBones && derivedBones.map((bone) => {
+            {settings.showBones && visibleBones.map((bone) => {
                if (bone.visible === false) return null;
                const isSelected = selection?.type === 'BONE' && selection.id === bone.id;
                let boneColor = bone.color || '#a3a3a3';
@@ -261,11 +339,14 @@ export const Viewport: React.FC<ViewportProps> = ({
                    if (transformMode === 'ROTATE') { boneColor = '#3b82f6'; jointColor = '#1d4ed8'; } 
                    else if (transformMode === 'TRANSLATE') { jointColor = '#fff'; }
                }
+               const width = settings.boneThickness || 20; // Smart sizing
+               const tipWidth = width * 0.3;
+
                return (
                  <g key={bone.id} onMouseDown={(e) => handleObjectMouseDown(e, 'bone', bone.id)} className={`transition-opacity ${bone.locked ? '' : 'hover:opacity-90'}`}>
-                    <path d={getBonePath(bone, 20, 20)} fill="transparent" stroke="transparent" />
-                    <path d={getBonePath(bone, 6, 2)} fill={boneColor} stroke="none" opacity={0.9} />
-                    <circle cx={bone.worldStart.x} cy={bone.worldStart.y} r={4} fill={jointColor} stroke={boneColor} strokeWidth={2} />
+                    <path d={getBonePath(bone, width, width)} fill="transparent" stroke="transparent" />
+                    <path d={getBonePath(bone, tipWidth, tipWidth/3)} fill={boneColor} stroke="none" opacity={0.9} />
+                    <circle cx={bone.worldStart.x} cy={bone.worldStart.y} r={tipWidth/1.5} fill={jointColor} stroke={boneColor} strokeWidth={2} />
                     {/* Render Constraints Visuals */}
                     {bone.constraints?.some(c => c.type === 'LIMIT_ROTATION') && (
                         <path d={`M ${bone.worldStart.x} ${bone.worldStart.y} L ${bone.worldStart.x + 10} ${bone.worldStart.y}`} stroke="yellow" strokeWidth={1} opacity={0.5} />
