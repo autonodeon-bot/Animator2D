@@ -6,7 +6,7 @@ import { Properties } from './components/Properties';
 import { Outliner } from './components/Outliner';
 import { MenuBar } from './components/MenuBar';
 import { Toolbar } from './components/Toolbar';
-import { Bone, ToolMode, TimelineMode, CameraState, AnimationClip, Sprite, ProjectFile, AppSettings, Selection, HistoryState, TransformMode, DrawingStroke, ReferenceImage, LoopRange, Vector2, ContextMenuState } from './types';
+import { Bone, ToolMode, TimelineMode, CameraState, AnimationClip, Sprite, ProjectFile, AppSettings, Selection, HistoryState, TransformMode, DrawingStroke, ReferenceImage, LoopRange, Vector2, ContextMenuState, ModalState } from './types';
 import { applyAnimation, renderFrameToCanvas, createHumanRig, createWalkCycle, createDummySprites, evaluateDrivers, exportGameData, calculateMotionPath, calculateFK } from './utils';
 import { Copy, Trash2, RotateCcw, Lock, Unlock } from 'lucide-react';
 
@@ -43,6 +43,11 @@ const App: React.FC = () => {
   const [autoKey, setAutoKey] = useState(false);
   const [isolateMode, setIsolateMode] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ x: 0, y: 0, visible: false });
+
+  // Modal State for Blender-style G/R operations
+  const [modalState, setModalState] = useState<ModalState | null>(null);
+  // Snapshot of state before modal op (for cancel)
+  const preModalState = useRef<{bones: Bone[], sprites: Sprite[]} | null>(null);
 
   // Timeline State
   const [currentFrame, setCurrentFrame] = useState(0);
@@ -164,14 +169,46 @@ const App: React.FC = () => {
      setCamera({ x: midX, y: midY, zoom: Math.min(1, 600 / Math.max(width, height)), rotation: 0 }); 
   };
 
+  // --- Keyboard Shortcuts & Modal Handling ---
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return;
       
       const step = e.shiftKey ? 10 : 1;
 
+      // Modal Cancellation/Confirmation
+      if (modalState?.active) {
+          if (e.key === 'Escape' || e.key === 'Delete') {
+              // Cancel
+              if (preModalState.current) {
+                  setBones(preModalState.current.bones);
+                  setSprites(preModalState.current.sprites);
+              }
+              setModalState(null);
+              preModalState.current = null;
+          }
+          if (e.key === 'Enter') {
+              // Confirm
+              setModalState(null);
+              preModalState.current = null;
+              pushHistory();
+          }
+          return; // Block other keys during modal
+      }
+
+      // Start Modal Operations (Blender Style)
+      if (e.key.toLowerCase() === 'g' && selection) {
+          preModalState.current = { bones: [...bones], sprites: [...sprites] };
+          setModalState({ active: true, type: 'GRAB' });
+      }
+      if (e.key.toLowerCase() === 'r' && selection && !e.ctrlKey) {
+          preModalState.current = { bones: [...bones], sprites: [...sprites] };
+          setModalState({ active: true, type: 'ROTATE' });
+      }
+
+
       // Nudge Controls
-      if (selection) {
+      if (selection && !modalState?.active) {
           if (e.key === 'ArrowUp') {
               if (selection.type === 'BONE' && transformMode === 'TRANSLATE') updateBone(selection.id, { y: (bones.find(b=>b.id===selection.id)?.y || 0) - step });
               if (selection.type === 'SPRITE') updateSprite(selection.id, { offsetY: (sprites.find(s=>s.id===selection.id)?.offsetY || 0) - step });
@@ -193,8 +230,10 @@ const App: React.FC = () => {
       if (e.key.toLowerCase() === 'v') setMode(ToolMode.SELECT);
       if (e.key.toLowerCase() === 'c') setMode(ToolMode.CAMERA);
       if (e.key.toLowerCase() === 'd') setMode(ToolMode.DRAW);
-      if (e.key.toLowerCase() === 'g') setTransformMode('TRANSLATE');
-      if (e.key.toLowerCase() === 'r' && !e.ctrlKey) setTransformMode('ROTATE');
+      // G and R handled above for modal, but if no selection, set tool mode
+      if (e.key.toLowerCase() === 'g' && !selection) setTransformMode('TRANSLATE');
+      if (e.key.toLowerCase() === 'r' && !selection && !e.ctrlKey) setTransformMode('ROTATE');
+
       if (e.key.toLowerCase() === 'h' && !e.shiftKey) setShowHelp(prev => !prev);
       if (e.key.toLowerCase() === 'h' && e.shiftKey) setIsolateMode(prev => !prev);
       if (e.key.toLowerCase() === 'f') handleFitCamera();
@@ -209,7 +248,7 @@ const App: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => { window.removeEventListener('keydown', handleKeyDown); };
-  }, [selection, bones, sprites, historyIndex, currentFrame, transformMode]);
+  }, [selection, bones, sprites, historyIndex, currentFrame, transformMode, modalState]);
 
   const updateBone = (id: string, updates: Partial<Bone>) => {
     const updatedBones = bones.map(b => b.id === id ? { ...b, ...updates } : b);
@@ -382,7 +421,6 @@ const App: React.FC = () => {
       setTriggerSnapshot(false);
   };
 
-  // Context Menu Actions
   const handleContextAction = (action: string) => {
       setContextMenu(prev => ({ ...prev, visible: false }));
       if (!contextMenu.targetId) return;
@@ -477,6 +515,12 @@ const App: React.FC = () => {
             onSnapshot={handleSnapshot}
             triggerSnapshot={triggerSnapshot}
             onContextMenu={(e, id, type) => setContextMenu({ x: e.clientX, y: e.clientY, visible: true, targetId: id, type })}
+            modalState={modalState}
+            onModalConfirm={() => {
+                setModalState(null);
+                preModalState.current = null;
+                pushHistory();
+            }}
           />
           
           {/* Context Menu */}
@@ -490,7 +534,7 @@ const App: React.FC = () => {
               </div>
           )}
 
-          {showHelp && <div className="absolute top-10 left-10 bg-neutral-800/95 backdrop-blur border border-neutral-600 p-4 rounded shadow-2xl z-50 text-xs w-64"><h3 className="font-bold text-base text-white mb-4">Shortcuts</h3><div className="grid grid-cols-2 gap-2"><span className="text-orange-400">V</span><span>Select</span><span className="text-orange-400">G</span><span>Move/IK</span><span className="text-orange-400">R</span><span>Rotate</span><span className="text-orange-400">D</span><span>Draw</span><span className="text-orange-400">F</span><span>Focus</span><span className="text-orange-400">Shift+H</span><span>Isolate</span><span className="text-orange-400">Arrows</span><span>Nudge</span></div><button onClick={()=>setShowHelp(false)} className="mt-4 w-full bg-neutral-700 py-1 rounded">Close</button></div>}
+          {showHelp && <div className="absolute top-10 left-10 bg-neutral-800/95 backdrop-blur border border-neutral-600 p-4 rounded shadow-2xl z-50 text-xs w-64"><h3 className="font-bold text-base text-white mb-4">Shortcuts</h3><div className="grid grid-cols-2 gap-2"><span className="text-orange-400">V</span><span>Select</span><span className="text-orange-400">G</span><span>Move/IK</span><span className="text-orange-400">R</span><span>Rotate</span><span className="text-orange-400">D</span><span>Draw</span><span className="text-orange-400">F</span><span>Focus</span><span className="text-orange-400">Shift+H</span><span>Isolate</span><span className="text-orange-400">Arrows</span><span>Nudge</span><span className="text-orange-400">Enter</span><span>Confirm Modal</span><span className="text-orange-400">Esc</span><span>Cancel Modal</span></div><button onClick={()=>setShowHelp(false)} className="mt-4 w-full bg-neutral-700 py-1 rounded">Close</button></div>}
           <Timeline 
             mode={timelineMode} 
             setMode={setTimelineMode} 

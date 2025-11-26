@@ -176,7 +176,7 @@ export interface AppSettings {
   onionSkinFrames: number;
   backgroundColor: string;
   boneThickness: number;
-  boneStyle: BoneStyle; // NEW
+  boneStyle: BoneStyle; 
 }
 
 export type SelectionType = 'BONE' | 'SPRITE' | 'VERTEX';
@@ -206,4 +206,12 @@ export interface ContextMenuState {
 export interface TimelineSelection {
     trackIdx: number;
     keyIndex: number;
+}
+
+export interface ModalState {
+  active: boolean;
+  type: 'GRAB' | 'ROTATE';
+  startX?: number; // Screen coords
+  startY?: number;
+  startMouseWorld?: Vector2; // Local/World coords at start
 }

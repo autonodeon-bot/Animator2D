@@ -60,6 +60,7 @@ export const Timeline: React.FC<TimelineProps> = ({
   } | null>(null);
 
   const [selection, setSelection] = useState<TimelineSelection[]>([]);
+  const [hoverKey, setHoverKey] = useState<{trackIdx: number, keyIndex: number} | null>(null);
 
   const FRAME_WIDTH = 12 * zoom;
   const HEADER_HEIGHT = 40; // Taller for ticks
@@ -202,15 +203,17 @@ export const Timeline: React.FC<TimelineProps> = ({
                     const ky = y + (ROW_HEIGHT / 2);
                     
                     const isSelected = selection.some(s => s.trackIdx === idx && s.keyIndex === kIdx);
+                    const isHovered = hoverKey?.trackIdx === idx && hoverKey?.keyIndex === kIdx;
 
                     // Key Color based on Easing
                     if (isSelected) ctx.fillStyle = '#ffffff'; // Selected = White
+                    else if (isHovered) ctx.fillStyle = '#e5e5e5'; // Hover = Light Grey
                     else if (kf.easing === 'linear') ctx.fillStyle = '#a3a3a3'; // Linear = Grey
                     else if (kf.easing.includes('ease')) ctx.fillStyle = '#4ade80'; // Smooth = Green
                     else ctx.fillStyle = '#facc15'; // Other = Yellow
                     
                     // 3ds Max Style Rectangle Keys with border
-                    ctx.strokeStyle = '#000';
+                    ctx.strokeStyle = isSelected || isHovered ? '#fff' : '#000';
                     ctx.lineWidth = 1;
                     ctx.fillRect(kx - 4, ky - 6, 8, 12);
                     ctx.strokeRect(kx - 4, ky - 6, 8, 12);
@@ -229,17 +232,9 @@ export const Timeline: React.FC<TimelineProps> = ({
       // Playhead Top Triangle
       ctx.fillStyle = '#ef4444';
       ctx.beginPath(); ctx.moveTo(playheadX - 6, 0); ctx.lineTo(playheadX + 6, 0); ctx.lineTo(playheadX, 10); ctx.fill();
-
-      // Box Selection Rect
-      if (dragState?.type === 'BOX_SELECT') {
-         const rect = canvas.getBoundingClientRect();
-         // We need current mouse pos, but we only have start. Ideally we track mouse move in state or ref.
-         // Simplified: Box selection visual is handled by Overlay div usually, but here we can draw if we tracked current mouse
-      }
-
     };
     render();
-  }, [currentFrame, mode, clip, zoom, wrapperRef.current?.clientWidth, wrapperRef.current?.clientHeight, bones, loopRange, selection, scrollX]);
+  }, [currentFrame, mode, clip, zoom, wrapperRef.current?.clientWidth, wrapperRef.current?.clientHeight, bones, loopRange, selection, scrollX, hoverKey]);
 
   // --- Input Handling ---
 
@@ -260,24 +255,6 @@ export const Timeline: React.FC<TimelineProps> = ({
       const frame = Math.round((x - SIDEBAR_WIDTH + scrollX) / FRAME_WIDTH);
       const relativeY = y - HEADER_HEIGHT - SUMMARY_HEIGHT;
       const trackIdx = Math.floor(relativeY / ROW_HEIGHT);
-
-      // 2. Summary Track Click
-      if (y >= HEADER_HEIGHT && y < HEADER_HEIGHT + SUMMARY_HEIGHT) {
-          // Select all keys at this frame
-          const newSel: TimelineSelection[] = [];
-          clip.tracks.forEach((t, ti) => {
-              const ki = t.keyframes.findIndex(k => Math.abs(k.time - frame) < 0.2);
-              if (ki !== -1) newSel.push({ trackIdx: ti, keyIndex: ki });
-          });
-          setSelection(newSel);
-          if (newSel.length > 0) {
-              const initialKeys = newSel.map(s => ({
-                  trackIdx: s.trackIdx, keyIndex: s.keyIndex, time: clip.tracks[s.trackIdx].keyframes[s.keyIndex].time
-              }));
-              setDragState({ active: true, type: 'KEY_MOVE', startX: e.clientX, startY: e.clientY, startScrollX: scrollX, initialKeys });
-          }
-          return;
-      }
 
       // 3. Track Key Click
       if (x >= SIDEBAR_WIDTH && trackIdx >= 0 && trackIdx < clip.tracks.length) {
@@ -310,8 +287,27 @@ export const Timeline: React.FC<TimelineProps> = ({
       }
   };
 
+  // Add global window listeners for smooth dragging
   useEffect(() => {
     const handleWindowMove = (e: MouseEvent) => {
+        // Hover Detection (Local)
+        if (canvasRef.current) {
+            const rect = canvasRef.current.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const frame = Math.round((x - SIDEBAR_WIDTH + scrollX) / FRAME_WIDTH);
+            const relativeY = y - HEADER_HEIGHT - SUMMARY_HEIGHT;
+            const trackIdx = Math.floor(relativeY / ROW_HEIGHT);
+            
+            if (x >= SIDEBAR_WIDTH && trackIdx >= 0 && trackIdx < clip.tracks.length) {
+                 const keyIndex = clip.tracks[trackIdx].keyframes.findIndex(k => Math.abs(k.time - frame) < 0.4);
+                 if (keyIndex !== -1) setHoverKey({ trackIdx, keyIndex });
+                 else setHoverKey(null);
+            } else {
+                setHoverKey(null);
+            }
+        }
+
         if (isScrubbing && canvasRef.current) {
             const rect = canvasRef.current.getBoundingClientRect();
             const x = e.clientX - rect.left;
@@ -329,7 +325,6 @@ export const Timeline: React.FC<TimelineProps> = ({
                     const newTime = Math.max(0, init.time + dtFrames);
                     // Check collision
                     const track = newClip.tracks[init.trackIdx];
-                    // Ensure we don't overwrite non-selected keys
                     const collision = track.keyframes.some((k, i) => i !== init.keyIndex && k.time === newTime && !selection.some(s => s.trackIdx === init.trackIdx && s.keyIndex === i));
                     
                     if (!collision) {
@@ -339,8 +334,6 @@ export const Timeline: React.FC<TimelineProps> = ({
                 updateClip(newClip);
             }
         }
-        
-        // Handle Box Select visual logic would go here
     };
 
     const handleWindowUp = (e: MouseEvent) => {
@@ -381,10 +374,8 @@ export const Timeline: React.FC<TimelineProps> = ({
         setDragState(null);
     };
 
-    if (isScrubbing || dragState?.active) {
-        window.addEventListener('mousemove', handleWindowMove);
-        window.addEventListener('mouseup', handleWindowUp);
-    }
+    window.addEventListener('mousemove', handleWindowMove);
+    window.addEventListener('mouseup', handleWindowUp);
     return () => {
         window.removeEventListener('mousemove', handleWindowMove);
         window.removeEventListener('mouseup', handleWindowUp);

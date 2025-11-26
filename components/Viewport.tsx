@@ -1,6 +1,6 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { Bone, ToolMode, CameraState, Sprite, AppSettings, Selection, DerivedBone, TransformMode, DrawingStroke, ReferenceImage, Vector2 } from '../types';
+import { Bone, ToolMode, CameraState, Sprite, AppSettings, Selection, DerivedBone, TransformMode, DrawingStroke, ReferenceImage, Vector2, ModalState } from '../types';
 import { calculateFK, degToRad, radToDeg, solveIK } from '../utils';
 
 interface ViewportProps {
@@ -24,6 +24,8 @@ interface ViewportProps {
   onSnapshot: (blob: Blob) => void;
   triggerSnapshot: boolean;
   onContextMenu: (e: React.MouseEvent, id: string, type: 'BONE' | 'SPRITE') => void;
+  modalState: ModalState | null;
+  onModalConfirm: () => void;
 }
 
 export const Viewport: React.FC<ViewportProps> = ({
@@ -46,10 +48,15 @@ export const Viewport: React.FC<ViewportProps> = ({
   isolateMode,
   onSnapshot,
   triggerSnapshot,
-  onContextMenu
+  onContextMenu,
+  modalState,
+  onModalConfirm
 }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   
+  // Track last mouse position for initializing modal drags
+  const lastMousePosRef = useRef<Vector2>({ x: 0, y: 0 });
+
   const [dragState, setDragState] = useState<{
     active: boolean;
     type: 'bone' | 'sprite' | 'camera' | 'drawing';
@@ -60,6 +67,9 @@ export const Viewport: React.FC<ViewportProps> = ({
     pivot?: Vector2;
     startAngle?: number;
     currentPoints?: {x: number, y: number}[];
+    // For Modal Interaction
+    isModal?: boolean;
+    startMouseWorld?: Vector2;
   } | null>(null);
 
   const derivedBones = calculateFK(bones);
@@ -101,9 +111,56 @@ export const Viewport: React.FC<ViewportProps> = ({
       }
   }, [triggerSnapshot, onSnapshot]);
 
+  // --- Modal State Handling ---
+  useEffect(() => {
+    if (modalState?.active && selection) {
+        // Initialize Drag immediately when modal activates (G or R pressed)
+        // Use last known mouse position as start, or center of screen if unknown?
+        // Actually, for G/R without click, we can assume the operation starts RELATIVE to current mouse
+        // Or for Rotation, starts based on angle to mouse.
+        
+        const mousePos = lastMousePosRef.current;
+        if (selection.type === 'BONE') {
+            const bone = bones.find(b => b.id === selection.id);
+            const derivedBone = derivedBones.find(b => b.id === selection.id);
+            if (bone && derivedBone) {
+                const angleToMouse = Math.atan2(mousePos.y - derivedBone.worldStart.y, mousePos.x - derivedBone.worldStart.x);
+                setDragState({
+                    active: true,
+                    type: 'bone',
+                    targetId: bone.id,
+                    startX: 0, // Not used in modal as we rely on relative math
+                    startY: 0,
+                    initialVal: { rotation: bone.rotation, x: bone.x, y: bone.y },
+                    pivot: derivedBone.worldStart,
+                    startAngle: angleToMouse,
+                    isModal: true,
+                    startMouseWorld: mousePos
+                });
+            }
+        } else if (selection.type === 'SPRITE') {
+            const sprite = sprites.find(s => s.id === selection.id);
+            if (sprite) {
+                setDragState({
+                    active: true,
+                    type: 'sprite',
+                    targetId: sprite.id,
+                    startX: 0,
+                    startY: 0,
+                    initialVal: { offsetX: sprite.offsetX, offsetY: sprite.offsetY },
+                    isModal: true,
+                    startMouseWorld: mousePos
+                });
+            }
+        }
+    } else if (!modalState?.active && dragState?.isModal) {
+        setDragState(null); // Cancel modal drag if state cleared externally
+    }
+  }, [modalState, selection]); // Intentionally not including bones/sprites to prevent reset on update
+
   const getCursor = () => {
       if (mode === ToolMode.DRAW) return 'crosshair';
-      if (dragState?.active) return 'grabbing';
+      if (dragState?.active) return 'none'; // Hide cursor during operation? Or grabbing. Blender hides and wraps.
       if (mode === ToolMode.CAMERA) return 'move';
       if (mode === ToolMode.SELECT) {
           if (selection?.type === 'BONE') return transformMode === 'ROTATE' ? 'alias' : 'crosshair';
@@ -133,6 +190,12 @@ export const Viewport: React.FC<ViewportProps> = ({
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
+    // If in Modal Mode, clicking confirms the action
+    if (modalState?.active && dragState?.isModal) {
+        onModalConfirm();
+        return;
+    }
+
     if (mode === ToolMode.CAMERA || e.button === 1) {
       e.preventDefault();
       setDragState({ active: true, type: 'camera', startX: e.clientX, startY: e.clientY, initialVal: { ...camera } });
@@ -147,49 +210,66 @@ export const Viewport: React.FC<ViewportProps> = ({
   const handleObjectMouseDown = (e: React.MouseEvent, type: 'bone' | 'sprite', id: string) => {
     e.stopPropagation(); e.preventDefault();
     
-    // Right Click Context Menu
     if (e.button === 2) {
         onContextMenu(e, id, type === 'bone' ? 'BONE' : 'SPRITE');
         setSelection({ type: type === 'bone' ? 'BONE' : 'SPRITE', id });
         return;
     }
 
-    setSelection({ type: type === 'bone' ? 'BONE' : 'SPRITE', id });
-    const mousePos = getLocalMouse(e.clientX, e.clientY);
+    // Standard Drag Logic (if not Modal)
+    if (!modalState?.active) {
+        setSelection({ type: type === 'bone' ? 'BONE' : 'SPRITE', id });
+        const mousePos = getLocalMouse(e.clientX, e.clientY);
 
-    if (mode === ToolMode.SELECT) {
-        if (type === 'bone' && bones) {
-            const bone = bones.find(b => b.id === id);
-            const derivedBone = derivedBones.find(b => b.id === id);
-            
-            if (bone && derivedBone && !bone.locked) {
-                 const angleToMouse = Math.atan2(mousePos.y - derivedBone.worldStart.y, mousePos.x - derivedBone.worldStart.x);
-                 setDragState({ 
-                     active: true, 
-                     type: 'bone', 
-                     targetId: id, 
-                     startX: e.clientX, 
-                     startY: e.clientY, 
-                     initialVal: { rotation: bone.rotation, x: bone.x, y: bone.y },
-                     pivot: derivedBone.worldStart,
-                     startAngle: angleToMouse
-                 });
-            }
-        } else if (type === 'sprite' && sprites) {
-            const sprite = sprites.find(s => s.id === id);
-            if (sprite) {
-                setDragState({ active: true, type: 'sprite', targetId: id, startX: e.clientX, startY: e.clientY, initialVal: { offsetX: sprite.offsetX, offsetY: sprite.offsetY } });
+        if (mode === ToolMode.SELECT) {
+            if (type === 'bone' && bones) {
+                const bone = bones.find(b => b.id === id);
+                const derivedBone = derivedBones.find(b => b.id === id);
+                
+                if (bone && derivedBone && !bone.locked) {
+                    const angleToMouse = Math.atan2(mousePos.y - derivedBone.worldStart.y, mousePos.x - derivedBone.worldStart.x);
+                    setDragState({ 
+                        active: true, 
+                        type: 'bone', 
+                        targetId: id, 
+                        startX: e.clientX, 
+                        startY: e.clientY, 
+                        initialVal: { rotation: bone.rotation, x: bone.x, y: bone.y },
+                        pivot: derivedBone.worldStart,
+                        startAngle: angleToMouse,
+                        isModal: false
+                    });
+                }
+            } else if (type === 'sprite' && sprites) {
+                const sprite = sprites.find(s => s.id === id);
+                if (sprite) {
+                    setDragState({ 
+                        active: true, 
+                        type: 'sprite', 
+                        targetId: id, 
+                        startX: e.clientX, 
+                        startY: e.clientY, 
+                        initialVal: { offsetX: sprite.offsetX, offsetY: sprite.offsetY },
+                        isModal: false,
+                        startMouseWorld: mousePos // Important for relative projection
+                    });
+                }
             }
         }
     }
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
+    const worldMouse = getLocalMouse(e.clientX, e.clientY);
+    lastMousePosRef.current = worldMouse; // Update global ref
+
     if (!dragState || !dragState.active) return;
     
+    // Calculate raw screen delta
     const dx = e.clientX - dragState.startX;
     const dy = e.clientY - dragState.startY;
 
+    // --- Camera Pan ---
     if (dragState.type === 'camera') {
         const rad = degToRad(camera.rotation);
         const cos = Math.cos(rad); const sin = Math.sin(rad);
@@ -197,20 +277,35 @@ export const Viewport: React.FC<ViewportProps> = ({
         const rdy = (-dx * sin + dy * cos) / camera.zoom;
         setCamera(prev => ({ ...prev, x: dragState.initialVal.x - rdx, y: dragState.initialVal.y - rdy }));
     } 
+    // --- Drawing ---
     else if (dragState.type === 'drawing') {
-        const p = getLocalMouse(e.clientX, e.clientY);
-        setDragState(prev => prev ? ({ ...prev, currentPoints: [...(prev.currentPoints || []), p] }) : null);
+        setDragState(prev => prev ? ({ ...prev, currentPoints: [...(prev.currentPoints || []), worldMouse] }) : null);
     }
+    // --- Bone Manipulation (Rotate / IK) ---
     else if (dragState.type === 'bone' && dragState.targetId && bones) {
       const bone = bones.find(b => b.id === dragState.targetId);
       if (!bone || bone.locked) return;
       
-      const worldMouse = getLocalMouse(e.clientX, e.clientY);
+      const isMoveMode = transformMode === 'TRANSLATE' || (modalState?.active && modalState.type === 'GRAB');
 
-      if (transformMode === 'TRANSLATE') {
+      if (isMoveMode) {
          if (bone.parentId === null) {
-             updateBone(bone.id, { x: snap(worldMouse.x), y: snap(worldMouse.y) });
+             // Root Move
+             // Logic: If modal, relative move from startMouseWorld. If drag, relative from startX/Y transformed.
+             // Simplification: Calculate delta in world space
+             
+             // For simplicity, snapping root to mouse world pos (minus offset if we tracked it, but centering is fine for Grab)
+             // Blender Grab: Object tracks mouse delta.
+             if (dragState.isModal && dragState.startMouseWorld) {
+                 const deltaX = worldMouse.x - dragState.startMouseWorld.x;
+                 const deltaY = worldMouse.y - dragState.startMouseWorld.y;
+                 updateBone(bone.id, { x: snap(dragState.initialVal.x + deltaX), y: snap(dragState.initialVal.y + deltaY) });
+             } else {
+                 updateBone(bone.id, { x: snap(worldMouse.x), y: snap(worldMouse.y) });
+             }
+
          } else {
+             // IK Move
              const solvedBones = solveIK(bones, bone.id, worldMouse);
              solvedBones.forEach(sb => {
                  const original = bones.find(b => b.id === sb.id);
@@ -218,28 +313,34 @@ export const Viewport: React.FC<ViewportProps> = ({
              });
          }
       } else {
+         // Rotation Mode
          if (dragState.pivot && dragState.startAngle !== undefined) {
              const currentAngle = Math.atan2(worldMouse.y - dragState.pivot.y, worldMouse.x - dragState.pivot.x);
-             const angleDiff = radToDeg(currentAngle - dragState.startAngle);
+             
+             // In Modal Rotation (Blender style), we often want to start relative to the initial click angle
+             // If dragging, we use startAngle recorded at MouseDown.
+             
+             let angleDiff = radToDeg(currentAngle - dragState.startAngle);
+             
+             // Normalize to avoid jumps
+             while (angleDiff > 180) angleDiff -= 360;
+             while (angleDiff < -180) angleDiff += 360;
+
              let newRot = dragState.initialVal.rotation + angleDiff;
              if (settings.snapToGrid) newRot = Math.round(newRot / 15) * 15;
              updateBone(bone.id, { rotation: newRot });
          }
       }
     }
+    // --- Sprite Manipulation ---
     else if (dragState.type === 'sprite' && dragState.targetId) {
         const sprite = sprites.find(s => s.id === dragState.targetId);
         const parentBone = derivedBones.find(b => b.id === sprite?.boneId);
         
-        if (sprite && parentBone) {
-            // Fix: Project screen delta onto bone's local coordinate system
-            const zoomDx = dx / camera.zoom;
-            const zoomDy = dy / camera.zoom;
-            
-            // Adjust for Camera Rotation first
-            const camRad = degToRad(-camera.rotation);
-            const worldDx = zoomDx * Math.cos(camRad) - zoomDy * Math.sin(camRad);
-            const worldDy = zoomDx * Math.sin(camRad) + zoomDy * Math.cos(camRad);
+        if (sprite && parentBone && dragState.startMouseWorld) {
+            // Calculate Delta in World Space
+            const worldDx = worldMouse.x - dragState.startMouseWorld.x;
+            const worldDy = worldMouse.y - dragState.startMouseWorld.y;
 
             // Project onto Bone Local Axis (inverse rotate by bone world rotation)
             const boneRad = degToRad(-parentBone.worldRotation);
@@ -255,6 +356,9 @@ export const Viewport: React.FC<ViewportProps> = ({
   };
 
   const handleMouseUp = () => {
+    // If modal, do not stop dragging on mouse up (wait for click/confirm)
+    if (dragState?.isModal) return;
+
     if (dragState?.type === 'drawing' && dragState.currentPoints) {
         addDrawing({
             id: Date.now().toString(),
@@ -281,7 +385,6 @@ export const Viewport: React.FC<ViewportProps> = ({
      const px = -ny; const py = nx;
 
      if (style === 'OCTAHEDRAL') {
-        // Blender-like shape
         const midX = bone.worldStart.x + dx * 0.2;
         const midY = bone.worldStart.y + dy * 0.2;
         const x1 = midX + px * widthStart; const y1 = midY + py * widthStart;
@@ -289,7 +392,7 @@ export const Viewport: React.FC<ViewportProps> = ({
         return `M ${bone.worldStart.x} ${bone.worldStart.y} L ${x1} ${y1} L ${bone.worldEnd.x} ${bone.worldEnd.y} L ${x2} ${y2} Z`;
      }
 
-     // WEDGE (Default)
+     // WEDGE
      const x1 = bone.worldStart.x + px * widthStart; const y1 = bone.worldStart.y + py * widthStart;
      const x2 = bone.worldStart.x - px * widthStart; const y2 = bone.worldStart.y - py * widthStart;
      const x3 = bone.worldEnd.x - px * widthEnd; const y3 = bone.worldEnd.y - py * widthEnd;
@@ -308,6 +411,7 @@ export const Viewport: React.FC<ViewportProps> = ({
                <span className={`font-bold ${mode === ToolMode.SELECT ? 'text-blue-400' : 'text-gray-500'}`}>
                    {mode === ToolMode.SELECT ? (transformMode === 'TRANSLATE' ? 'MOVE / IK [G]' : 'ROTATE [R]') : mode}
                </span>
+               {modalState?.active && <span className="text-yellow-400 font-bold ml-2 animate-pulse">{modalState.type} (Click to Confirm)</span>}
                {isolateMode && <span className="text-red-500 font-bold ml-2">ISOLATE</span>}
              </div>
              <div className="text-[10px] text-gray-400">
@@ -403,8 +507,8 @@ export const Viewport: React.FC<ViewportProps> = ({
                let jointColor = '#222';
                
                if (isSelected) {
-                   if (transformMode === 'ROTATE') { boneColor = '#3b82f6'; jointColor = '#1d4ed8'; } 
-                   else if (transformMode === 'TRANSLATE') { jointColor = '#fff'; }
+                   if (transformMode === 'ROTATE' || (modalState?.type === 'ROTATE')) { boneColor = '#3b82f6'; jointColor = '#1d4ed8'; } 
+                   else if (transformMode === 'TRANSLATE' || (modalState?.type === 'GRAB')) { jointColor = '#fff'; }
                }
                const width = settings.boneThickness || 20; 
                const tipWidth = width * 0.3;
