@@ -23,6 +23,7 @@ interface ViewportProps {
   isolateMode: boolean;
   onSnapshot: (blob: Blob) => void;
   triggerSnapshot: boolean;
+  onContextMenu: (e: React.MouseEvent, id: string, type: 'BONE' | 'SPRITE') => void;
 }
 
 export const Viewport: React.FC<ViewportProps> = ({
@@ -44,7 +45,8 @@ export const Viewport: React.FC<ViewportProps> = ({
   motionPath,
   isolateMode,
   onSnapshot,
-  triggerSnapshot
+  triggerSnapshot,
+  onContextMenu
 }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   
@@ -144,6 +146,14 @@ export const Viewport: React.FC<ViewportProps> = ({
 
   const handleObjectMouseDown = (e: React.MouseEvent, type: 'bone' | 'sprite', id: string) => {
     e.stopPropagation(); e.preventDefault();
+    
+    // Right Click Context Menu
+    if (e.button === 2) {
+        onContextMenu(e, id, type === 'bone' ? 'BONE' : 'SPRITE');
+        setSelection({ type: type === 'bone' ? 'BONE' : 'SPRITE', id });
+        return;
+    }
+
     setSelection({ type: type === 'bone' ? 'BONE' : 'SPRITE', id });
     const mousePos = getLocalMouse(e.clientX, e.clientY);
 
@@ -257,13 +267,29 @@ export const Viewport: React.FC<ViewportProps> = ({
     setDragState(null);
   };
 
-  const getBonePath = (bone: DerivedBone, widthStart: number, widthEnd: number) => {
+  const getBonePath = (bone: DerivedBone, widthStart: number, widthEnd: number, style: 'WEDGE' | 'LINE' | 'OCTAHEDRAL' = 'WEDGE') => {
      const dx = bone.worldEnd.x - bone.worldStart.x;
      const dy = bone.worldEnd.y - bone.worldStart.y;
      const length = Math.sqrt(dx*dx + dy*dy);
      if(length < 1) return "";
+     
+     if (style === 'LINE') {
+         return `M ${bone.worldStart.x} ${bone.worldStart.y} L ${bone.worldEnd.x} ${bone.worldEnd.y}`;
+     }
+     
      const nx = dx / length; const ny = dy / length;
      const px = -ny; const py = nx;
+
+     if (style === 'OCTAHEDRAL') {
+        // Blender-like shape
+        const midX = bone.worldStart.x + dx * 0.2;
+        const midY = bone.worldStart.y + dy * 0.2;
+        const x1 = midX + px * widthStart; const y1 = midY + py * widthStart;
+        const x2 = midX - px * widthStart; const y2 = midY - py * widthStart;
+        return `M ${bone.worldStart.x} ${bone.worldStart.y} L ${x1} ${y1} L ${bone.worldEnd.x} ${bone.worldEnd.y} L ${x2} ${y2} Z`;
+     }
+
+     // WEDGE (Default)
      const x1 = bone.worldStart.x + px * widthStart; const y1 = bone.worldStart.y + py * widthStart;
      const x2 = bone.worldStart.x - px * widthStart; const y2 = bone.worldStart.y - py * widthStart;
      const x3 = bone.worldEnd.x - px * widthEnd; const y3 = bone.worldEnd.y - py * widthEnd;
@@ -385,8 +411,8 @@ export const Viewport: React.FC<ViewportProps> = ({
 
                return (
                  <g key={bone.id} onMouseDown={(e) => handleObjectMouseDown(e, 'bone', bone.id)} className={`transition-opacity ${bone.locked ? '' : 'hover:opacity-90'}`}>
-                    <path d={getBonePath(bone, width, width)} fill="transparent" stroke="transparent" />
-                    <path d={getBonePath(bone, tipWidth, tipWidth/3)} fill={boneColor} stroke="none" opacity={0.9} />
+                    <path d={getBonePath(bone, width, width, settings.boneStyle)} fill={settings.boneStyle === 'LINE' ? 'none' : 'transparent'} stroke={settings.boneStyle === 'LINE' ? boneColor : 'transparent'} strokeWidth={settings.boneStyle === 'LINE' ? 2 : 0} />
+                    <path d={getBonePath(bone, tipWidth, tipWidth/3, settings.boneStyle)} fill={settings.boneStyle === 'LINE' ? 'none' : boneColor} stroke="none" opacity={0.9} />
                     <circle cx={bone.worldStart.x} cy={bone.worldStart.y} r={tipWidth/1.5} fill={jointColor} stroke={boneColor} strokeWidth={2} />
                     {bone.constraints?.some(c => c.type === 'LIMIT_ROTATION') && (
                         <path d={`M ${bone.worldStart.x} ${bone.worldStart.y} L ${bone.worldStart.x + 10} ${bone.worldStart.y}`} stroke="yellow" strokeWidth={1} opacity={0.5} />

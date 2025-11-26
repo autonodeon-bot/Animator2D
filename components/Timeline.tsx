@@ -166,6 +166,7 @@ export const Timeline: React.FC<TimelineProps> = ({
 
       // Handle Loop Dragging (Top Bar)
       if (y < LOOP_BAR_HEIGHT) {
+         // Double click check logic could go here, but doing simplified click logic
          const frame = Math.max(0, Math.round((x - SIDEBAR_WIDTH) / FRAME_WIDTH));
          if (e.shiftKey) setLoopRange({ ...loopRange, end: frame, enabled: true });
          else setLoopRange({ ...loopRange, start: frame, enabled: true });
@@ -194,6 +195,15 @@ export const Timeline: React.FC<TimelineProps> = ({
       if (x >= SIDEBAR_WIDTH) {
           const frame = Math.max(0, (x - SIDEBAR_WIDTH) / FRAME_WIDTH);
           setCurrentFrame(frame); 
+      }
+  };
+
+  const handleDoubleClick = (e: React.MouseEvent) => {
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const y = e.clientY - rect.top;
+      if (y < LOOP_BAR_HEIGHT) {
+          setLoopRange({ start: 0, end: clip.duration, enabled: true });
       }
   };
 
@@ -323,7 +333,7 @@ export const Timeline: React.FC<TimelineProps> = ({
       </div>
 
       <div className="flex-1 relative overflow-y-auto overflow-x-hidden" ref={wrapperRef}>
-          <canvas ref={canvasRef} className="absolute top-0 left-0 block cursor-pointer" onMouseDown={handleMouseDown} />
+          <canvas ref={canvasRef} className="absolute top-0 left-0 block cursor-pointer" onMouseDown={handleMouseDown} onDoubleClick={handleDoubleClick} />
       </div>
     </div>
     </>

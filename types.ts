@@ -164,16 +164,19 @@ export interface LoopRange {
     end: number;
 }
 
+export type BoneStyle = 'WEDGE' | 'LINE' | 'OCTAHEDRAL';
+
 export interface AppSettings {
   showGrid: boolean;
   snapToGrid: boolean;
   showBones: boolean;
-  showRulers: boolean; // NEW
-  showMotionPaths: boolean; // NEW
+  showRulers: boolean; 
+  showMotionPaths: boolean;
   onionSkin: boolean;
   onionSkinFrames: number;
   backgroundColor: string;
-  boneThickness: number; // NEW
+  boneThickness: number;
+  boneStyle: BoneStyle; // NEW
 }
 
 export type SelectionType = 'BONE' | 'SPRITE' | 'VERTEX';
@@ -190,4 +193,12 @@ export interface HistoryState {
   sprites: Sprite[];
   drawings: DrawingStroke[];
   currentClip: AnimationClip;
+}
+
+export interface ContextMenuState {
+    x: number;
+    y: number;
+    visible: boolean;
+    targetId?: string;
+    type?: 'BONE' | 'SPRITE';
 }

@@ -1,6 +1,7 @@
 
 import React, { useRef } from 'react';
-import { FolderOpen, Image as ImageIcon, Save, Video, Grid, Eye, Copy, ClipboardPaste, Undo, Redo, Layers, HelpCircle, Share, Camera, FileImage, Ruler, Unlock, Activity, RefreshCw } from 'lucide-react';
+import { FolderOpen, Image as ImageIcon, Save, Video, Grid, Eye, Copy, ClipboardPaste, Undo, Redo, Layers, HelpCircle, Share, Camera, FileImage, Ruler, Unlock, Activity, RefreshCw, UserCheck } from 'lucide-react';
+import { BoneStyle } from '../types';
 
 interface MenuBarProps {
   onImportSprite: (file: File) => void;
@@ -36,6 +37,9 @@ interface MenuBarProps {
   onionFrames: number;
   setOnionFrames: (f: number) => void;
   onInverseSelection: () => void;
+  boneStyle: BoneStyle;
+  setBoneStyle: (s: BoneStyle) => void;
+  onBindPose: () => void;
 }
 
 export const MenuBar: React.FC<MenuBarProps> = ({
@@ -71,7 +75,10 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   setBoneThickness,
   onionFrames,
   setOnionFrames,
-  onInverseSelection
+  onInverseSelection,
+  boneStyle,
+  setBoneStyle,
+  onBindPose
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const projectInputRef = useRef<HTMLInputElement>(null);
@@ -103,6 +110,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
            <div onClick={onUndo} className="px-4 py-2 hover:bg-blue-600 flex items-center gap-2 cursor-pointer"><Undo size={12} /> Undo (Ctrl+Z)</div>
            <div onClick={onRedo} className="px-4 py-2 hover:bg-blue-600 flex items-center gap-2 cursor-pointer"><Redo size={12} /> Redo (Ctrl+Y)</div>
            <div className="h-px bg-neutral-700 my-1"></div>
+           <div onClick={onBindPose} className="px-4 py-2 hover:bg-blue-600 flex items-center gap-2 cursor-pointer text-orange-400"><UserCheck size={12} /> Reset to Bind Pose</div>
            <div onClick={onCopyPose} className="px-4 py-2 hover:bg-blue-600 flex items-center gap-2 cursor-pointer"><Copy size={12} /> Copy Pose</div>
            <div onClick={onPastePose} className="px-4 py-2 hover:bg-blue-600 flex items-center gap-2 cursor-pointer"><ClipboardPaste size={12} /> Paste Pose</div>
            <div className="h-px bg-neutral-700 my-1"></div>
@@ -139,6 +147,16 @@ export const MenuBar: React.FC<MenuBarProps> = ({
            <div className="px-4 py-2">
                <span className="block mb-1 text-gray-400">Background Color</span>
                <input type="color" value={backgroundColor} onChange={(e) => setBackgroundColor(e.target.value)} className="w-full h-6 bg-transparent cursor-pointer" />
+           </div>
+           
+           <div className="h-px bg-neutral-700 my-1"></div>
+           <div className="px-4 py-2">
+               <span className="block mb-1 text-gray-400">Bone Style</span>
+               <select value={boneStyle} onChange={(e) => setBoneStyle(e.target.value as BoneStyle)} className="w-full bg-neutral-900 border border-neutral-600 rounded px-2 py-1 text-white outline-none">
+                   <option value="WEDGE">Wedge (Standard)</option>
+                   <option value="LINE">Line (Simple)</option>
+                   <option value="OCTAHEDRAL">Octahedral (Blender)</option>
+               </select>
            </div>
            <div className="px-4 py-2">
                <span className="block mb-1 text-gray-400">Bone Thickness</span>
