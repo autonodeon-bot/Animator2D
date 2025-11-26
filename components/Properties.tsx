@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { Bone, Sprite, Selection, Constraint, Driver } from '../types';
-import { Cuboid, Crosshair, Image as ImageIcon, Trash2, Anchor, Activity, Grid, Plus, Settings, X, AlignCenterHorizontal, AlignCenterVertical, ArrowLeftRight, ArrowUpDown, ChevronUp, ChevronDown, Layers } from 'lucide-react';
+import { Cuboid, Crosshair, Image as ImageIcon, Trash2, Anchor, Activity, Grid, Plus, Settings, X, AlignCenterHorizontal, AlignCenterVertical, ArrowLeftRight, ArrowUpDown, ChevronUp, ChevronDown, Layers, ArrowUpRight } from 'lucide-react';
 
 interface PropertiesProps {
   selection: Selection | null;
@@ -72,13 +72,29 @@ export const Properties: React.FC<PropertiesProps> = ({
                     <label className="text-xs font-bold text-gray-400 uppercase">Name</label>
                     <input type="text" value={bone.name} onChange={(e) => updateBone(bone.id, { name: e.target.value })} className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-white outline-none" />
                 </div>
-
+                
                 {activeTab === 'TRANSFORM' && (
                     <>
+                        {/* Smart Reparenting */}
+                        <div className="space-y-1">
+                             <label className="text-[10px] font-bold text-gray-500 uppercase flex items-center gap-1"><ArrowUpRight size={10}/> Parent</label>
+                             <select 
+                                value={bone.parentId || ''} 
+                                onChange={(e) => updateBone(bone.id, { parentId: e.target.value || null })} 
+                                className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white outline-none"
+                             >
+                                 <option value="">(None - Root)</option>
+                                 {bones.filter(b => b.id !== bone.id).map(b => (
+                                     <option key={b.id} value={b.id}>{b.name}</option>
+                                 ))}
+                             </select>
+                        </div>
+
                         <div className="space-y-3">
                             <label className="text-xs font-bold text-gray-400 uppercase border-b border-neutral-700 block pb-1">Transform</label>
                             <div className="grid grid-cols-2 gap-2 items-center"><span className="text-gray-500">Rotation</span><input type="number" value={Math.round(bone.rotation)} onChange={(e) => updateBone(bone.id, { rotation: parseFloat(e.target.value) })} className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-right text-white" /></div>
                             <div className="grid grid-cols-2 gap-2 items-center"><span className="text-gray-500">Length</span><input type="number" value={Math.round(bone.length)} onChange={(e) => updateBone(bone.id, { length: parseFloat(e.target.value) })} className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-right text-white" /></div>
+                            <div className="grid grid-cols-2 gap-2 items-center"><span className="text-gray-500">Color</span><input type="color" value={bone.color || '#a3a3a3'} onChange={(e) => updateBone(bone.id, { color: e.target.value })} className="w-full bg-neutral-800 h-6 border-none rounded" /></div>
                         </div>
                         <div className="space-y-3">
                             <label className="text-xs font-bold text-gray-400 uppercase border-b border-neutral-700 block pb-1">Attachments</label>

@@ -202,3 +202,8 @@ export interface ContextMenuState {
     targetId?: string;
     type?: 'BONE' | 'SPRITE';
 }
+
+export interface TimelineSelection {
+    trackIdx: number;
+    keyIndex: number;
+}

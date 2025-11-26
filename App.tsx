@@ -300,9 +300,25 @@ const App: React.FC = () => {
   };
 
   const handleDuplicateKey = () => {
-      // Logic to copy keyframe from current to current + 1
-      addKeyframe();
-      // This is a placeholder for complex "hold key" logic
+      // Duplicates keys from CURRENT frame to NEXT frame (Hold Pose)
+      const nextFrame = currentFrame + 1;
+      const newClip = { ...currentClip };
+      let changed = false;
+
+      // Logic: For every track that has a key at currentFrame, copy it to nextFrame
+      newClip.tracks.forEach(t => {
+          const k = t.keyframes.find(k => k.time === currentFrame);
+          if (k) {
+              const existingNext = t.keyframes.find(ek => ek.time === nextFrame);
+              if (existingNext) existingNext.value = k.value;
+              else t.keyframes.push({ ...k, time: nextFrame });
+              changed = true;
+          }
+      });
+      if (changed) {
+          setCurrentClip(newClip);
+          pushHistory();
+      }
   };
 
   const handleBindPose = () => {
@@ -492,6 +508,7 @@ const App: React.FC = () => {
             setPlaybackSpeed={setPlaybackSpeed}
             loopRange={loopRange}
             setLoopRange={setLoopRange}
+            onDuplicateKey={handleDuplicateKey}
           />
         </div>
         <Properties selection={selection} setSelection={setSelection} bones={bones} sprites={sprites} updateBone={updateBone} updateSprite={updateSprite} onAttachSprite={(bid) => attachSpriteToBone(bid)} onDelete={handleDeleteSelection} />
